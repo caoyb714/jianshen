@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { localDate, weekDates } from '../src/domain/dates'
 import { loadData, saveData } from '../src/domain/repository'
-import { makeSeed } from '../src/domain/seed'
+import { makeSeed, PROFILE_A } from '../src/domain/seed'
 import { summarize } from '../src/domain/stats'
 
 function memory(initial: string | null = null) {
@@ -71,9 +71,11 @@ describe('derived progress', () => {
       data = makeSeed(date)
     data.workouts = [
       {
-        id: 'w1',
+        profileId: PROFILE_A,
+        id: '11111111-1111-4111-8111-111111111111',
         date: '2026-11-16',
-        planId: 'full',
+        planId: 'plan',
+        planVersion: 1,
         title: 'test',
         minutes: 5,
         difficulty: 4,

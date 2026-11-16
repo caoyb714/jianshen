@@ -16,6 +16,7 @@ begin
   end if;
   insert into public.workspaces(name) values ('HerFit 共享空间') returning id into space_id;
   insert into public.workspace_members(workspace_id,user_id,seat) values (space_id,member_a,1),(space_id,member_b,2);
-  insert into public.health_profiles(workspace_id) values (space_id);
+  -- 两个档案位：slot 1 为被监督者（主要使用者），slot 2 为另一位成员。payload 留空，由 App 首次填写。
+  insert into public.health_profiles(workspace_id,slot) values (space_id,1),(space_id,2);
 end
 $$;

@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 import { useRegisterSW } from 'virtual:pwa-register/react'
 import { useStore } from './Store'
+import OnboardProfile from '../components/OnboardProfile'
 const navigation = [
   { to: '/', label: '首页', Icon: House },
   { to: '/training', label: '训练', Icon: Dumbbell },
@@ -21,7 +22,7 @@ const navigation = [
   { to: '/me', label: '我的', Icon: UserRound },
 ]
 export default function Shell() {
-  const { error, notice, cloud } = useStore(),
+  const { error, notice, cloud, active, profiles, switchProfile } = useStore(),
     location = useLocation(),
     [online, setOnline] = useState(navigator.onLine)
   const {
@@ -83,6 +84,20 @@ export default function Shell() {
               weekday: 'long',
             })}
           </span>
+          {profiles.length > 1 ? (
+            <div className="profile-switch" role="group" aria-label="切换档案">
+              {profiles.map((slot) => (
+                <button
+                  key={slot.id}
+                  aria-pressed={slot.id === active.id}
+                  onClick={() => void switchProfile(slot.id)}
+                  title={`档案位 ${slot.slot}`}
+                >
+                  {slot.profile?.name ?? `档案 ${slot.slot}`}
+                </button>
+              ))}
+            </div>
+          ) : null}
           <Link to="/me" className="demo-label">
             {cloud ? <LockKeyhole size={14} /> : <Laptop size={14} />}
             {cloud ? '私人共享空间' : '本机演示 · 数据未共享'}
@@ -109,11 +124,11 @@ export default function Shell() {
           </div>
         ) : null}
         <main id="main" tabIndex={-1}>
-          <Outlet />
+          {active.profile ? <Outlet /> : <OnboardProfile />}
         </main>
         <footer className="app-footer">
           <span>A little better, every day.</span>
-          <span>{cloud ? 'HerFit v0.2 · 私人共享' : 'HerFit v0.2 · 示例内容'}</span>
+          <span>{cloud ? 'HerFit v0.3 · 私人共享' : 'HerFit v0.3 · 示例内容'}</span>
         </footer>
       </div>
       <nav className="bottom-nav" aria-label="手机导航">

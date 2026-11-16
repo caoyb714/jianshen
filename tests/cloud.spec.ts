@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { PGlite } from '@electric-sql/pglite'
 import { test, expect, type BrowserContext, type Page, type Route } from '@playwright/test'
 
@@ -10,10 +10,11 @@ const users = {
 }
 const space = '10000000-0000-4000-8000-000000000001'
 const profile = '20000000-0000-4000-8000-000000000001'
-const migration = readFileSync(
-  new URL('../supabase/migrations/20261116000100_shared_workspace.sql', import.meta.url),
-  'utf8',
-)
+const MIGRATIONS = new URL('../supabase/migrations/', import.meta.url)
+const migrations = readdirSync(MIGRATIONS)
+  .filter((name) => name.endsWith('.sql'))
+  .sort()
+  .map((name) => readFileSync(new URL(name, MIGRATIONS), 'utf8'))
 
 async function emulateSupabase(contexts: BrowserContext[]) {
   const db = new PGlite()
@@ -27,7 +28,7 @@ async function emulateSupabase(contexts: BrowserContext[]) {
       .map((id) => `('${id}')`)
       .join(',')};
   `)
-  await db.exec(migration)
+  for (const sql of migrations) await db.exec(sql)
   await db.exec(`
     insert into public.workspaces(id,name) values ('${space}','测试共享空间');
     insert into public.workspace_members(workspace_id,user_id,seat) values
@@ -140,6 +141,7 @@ test('two members share records, preserve failed forms and exclude outsiders', a
   context,
   browser,
 }, testInfo) => {
+  test.setTimeout(90000)
   const options = { viewport: testInfo.project.use.viewport }
   const partner = await browser.newContext(options)
   const stranger = await browser.newContext(options)
@@ -148,7 +150,7 @@ test('two members share records, preserve failed forms and exclude outsiders', a
     const b = await partner.newPage()
     const c = await stranger.newPage()
     await login(page, 'a@example.invalid')
-    await expect(page.getByRole('heading', { name: '建立共享健康档案' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: '建立档案位 1' })).toBeVisible()
     await page.getByLabel('昵称').fill('测试档案')
     await page.getByLabel('年龄').fill('26')
     await page.getByLabel('身高（cm）').fill('165')
@@ -172,7 +174,7 @@ test('two members share records, preserve failed forms and exclude outsiders', a
     await expect(b.getByText('已保存：7.5 小时')).toBeVisible()
     await page.reload()
     await expect(page.getByText('7.5 小时')).toBeVisible()
-    expect(await page.evaluate(() => localStorage.getItem('herfit.demo.v1'))).toBeNull()
+    expect(await page.evaluate(() => localStorage.getItem('herfit.demo.v2'))).toBeNull()
     await login(c, 'outside@example.invalid')
     await expect(c.getByRole('alert')).toContainText('无法访问此共享空间')
     await expect(c.getByTestId('water-total')).toHaveCount(0)

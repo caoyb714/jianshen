@@ -1,20 +1,24 @@
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { PGlite } from '@electric-sql/pglite'
 import { afterAll, beforeAll, expect, it } from 'vitest'
 import { makeSeed } from '../src/domain/seed'
+import { generatePlan } from '../src/domain/engine'
+import type { TrainingPlan } from '../src/domain/model'
 
 const a = '00000000-0000-0000-0000-000000000001'
 const b = '00000000-0000-0000-0000-000000000002'
 const stranger = '00000000-0000-0000-0000-000000000003'
+const newcomer = '00000000-0000-0000-0000-000000000004'
 const space = '10000000-0000-0000-0000-000000000001'
 const other = '10000000-0000-0000-0000-000000000002'
+const fresh = '10000000-0000-0000-0000-000000000003'
 const profile = '20000000-0000-0000-0000-000000000001'
 const otherProfile = '20000000-0000-0000-0000-000000000002'
-const migration = new URL(
-  '../supabase/migrations/20261116000100_shared_workspace.sql',
-  import.meta.url,
-)
+const MIGRATIONS = new URL('../supabase/migrations/', import.meta.url)
 let db: PGlite
+
+const seed = makeSeed()
+const profileValue = seed.profiles[0].profile!
 
 beforeAll(async () => {
   db = new PGlite()
@@ -24,16 +28,25 @@ beforeAll(async () => {
     create table auth.users(id uuid primary key);
     create function auth.uid() returns uuid language sql stable
       as $$ select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$;
-    insert into auth.users values ('${a}'),('${b}'),('${stranger}');
+    insert into auth.users values ('${a}'),('${b}'),('${stranger}'),('${newcomer}');
   `)
-  await db.exec(readFileSync(migration, 'utf8'))
+  const files = readdirSync(MIGRATIONS)
+    .filter((name) => name.endsWith('.sql'))
+    .sort()
+  for (const name of files) {
+    await db.exec(readFileSync(new URL(name, MIGRATIONS), 'utf8'))
+  }
   await db.exec(`
-    insert into public.workspaces(id,name) values ('${space}','HerFit'),('${other}','Other');
+    insert into public.workspaces(id,name) values
+      ('${space}','HerFit'),('${other}','Other'),('${fresh}','Fresh');
     insert into public.workspace_members(workspace_id,user_id,seat) values
-      ('${space}','${a}',1),('${space}','${b}',2),('${other}','${stranger}',1);
-    insert into public.health_profiles(id,workspace_id) values ('${profile}','${space}'),('${otherProfile}','${other}');
+      ('${space}','${a}',1),('${space}','${b}',2),
+      ('${other}','${stranger}',1),('${fresh}','${newcomer}',1);
+    insert into public.health_profiles(id,workspace_id) values
+      ('${profile}','${space}'),('${otherProfile}','${other}');
   `)
-}, 30000)
+}, 60000)
+
 afterAll(async () => {
   if (db) await db.close()
 })
@@ -50,9 +63,18 @@ async function asUser(id: string | null, action: () => Promise<unknown>) {
     throw error
   }
 }
+type Snapshot = {
+  workspaceId: string
+  profiles: Array<{ id: string; slot: number; profile: { value: unknown; revision: number } }>
+  habits: Array<{ value: Record<string, unknown> }>
+  metrics: unknown[]
+  workouts: Array<{ value: Record<string, unknown>; createdBy: string | null }>
+  plans: Array<{ value: Record<string, unknown> }>
+  settings: { value: { showWeight: boolean } } | null
+}
 function read() {
   return db
-    .query<{ snapshot: Record<string, unknown> }>('select public.herfit_snapshot() as snapshot')
+    .query<{ snapshot: Snapshot }>('select public.herfit_snapshot() as snapshot')
     .then((result) => result.rows[0].snapshot)
 }
 function write(
@@ -63,42 +85,95 @@ function write(
   targetProfile = profile,
 ) {
   return db
-    .query<{ snapshot: Record<string, unknown> }>(
-      'select public.herfit_write($1,$2,$3,$4,$5) as snapshot',
-      [target, targetProfile, kind, JSON.stringify(data), expected],
-    )
+    .query<{ snapshot: Snapshot }>('select public.herfit_write($1,$2,$3,$4,$5) as snapshot', [
+      target,
+      targetProfile,
+      kind,
+      JSON.stringify(data),
+      expected,
+    ])
     .then((result) => result.rows[0].snapshot)
 }
 
-it('starts empty and shares a profile, but rejects a concurrent stale edit', async () => {
-  expect(await asUser(a, read)).toMatchObject({
+function planPayload(id: string, status: 'active' | 'archived' = 'active'): TrainingPlan {
+  const result = generatePlan({
+    age: 26,
+    experience: '刚刚开始',
+    weeklyDays: 3,
+    sessionMinutes: 25,
+    equipment: ['徒手', '哑铃', '弹力带'],
+    restrictions: '',
+    restrictionsConfirmed: true,
+  })
+  if (!result.ok) throw new Error(result.message)
+  return {
+    profileId: profile,
+    id,
+    version: 1,
+    generatedAt: '2026-11-16T10:00:00.000Z',
+    confirmedAt: status === 'active' ? '2026-11-16T10:01:00.000Z' : null,
+    status,
+    input: {
+      age: 26,
+      experience: '刚刚开始',
+      weeklyDays: 3,
+      sessionMinutes: 25,
+      equipment: ['徒手', '哑铃', '弹力带'],
+      restrictions: '',
+    },
+    days: result.days,
+    notes: result.notes,
+  }
+}
+
+it('shares two profile slots and rejects a stale edit', async () => {
+  const empty = await asUser(a, read)
+  expect(empty).toMatchObject({
     workspaceId: space,
-    profile: { value: null, revision: 1 },
     habits: [],
     metrics: [],
     workouts: [],
+    plans: [],
   })
-  await asUser(a, () => write('profile', { ...makeSeed().profile, name: '测试档案' }, 1))
-  expect(await asUser(b, read)).toMatchObject({
+  expect(empty.profiles).toHaveLength(1)
+  expect(empty.profiles[0]).toMatchObject({ slot: 1, profile: { value: null, revision: 1 } })
+
+  await asUser(a, () => write('profile', { ...profileValue, name: '测试档案' }, 1))
+  const filled = await asUser(b, read)
+  expect(filled.profiles[0]).toMatchObject({
     profile: { value: { name: '测试档案' }, revision: 2, createdBy: a, updatedBy: a },
   })
-  await expect(asUser(b, () => write('profile', makeSeed().profile, 1))).rejects.toMatchObject({
+
+  await expect(asUser(b, () => write('profile', profileValue, 1))).rejects.toMatchObject({
     code: '40001',
   })
-  await asUser(b, () => write('profile', { ...makeSeed().profile, name: '成员 B 修改' }, 2))
-  expect(await asUser(a, read)).toMatchObject({
+  await asUser(b, () => write('profile', { ...profileValue, name: '成员 B 修改' }, 2))
+  expect((await asUser(a, read)).profiles[0]).toMatchObject({
     profile: { value: { name: '成员 B 修改' }, revision: 3, createdBy: a, updatedBy: b },
   })
 })
+
+it('creates at most two profile slots per workspace', async () => {
+  const first = '20000000-0000-0000-0000-000000000003'
+  const second = '20000000-0000-0000-0000-000000000004'
+  const third = '20000000-0000-0000-0000-000000000005'
+  const one = await asUser(newcomer, () => write('profile', profileValue, null, fresh, first))
+  expect(one.profiles.map((row) => row.slot)).toEqual([1])
+  const two = await asUser(newcomer, () => write('profile', profileValue, null, fresh, second))
+  expect(two.profiles.map((row) => row.slot)).toEqual([1, 2])
+  await expect(
+    asUser(newcomer, () => write('profile', profileValue, null, fresh, third)),
+  ).rejects.toMatchObject({ code: '42501' })
+})
+
 it('rejects anonymous, cross-space access, self-enrollment, and forged audit writes', async () => {
   await expect(asUser(null, read)).rejects.toMatchObject({ code: '42501' })
-  expect(await asUser(stranger, read)).toMatchObject({
-    workspaceId: other,
-    profile: { value: null },
+  const foreign = await asUser(stranger, read)
+  expect(foreign).toMatchObject({ workspaceId: other })
+  expect(foreign.profiles[0]).toMatchObject({ profile: { value: null } })
+  await expect(asUser(stranger, () => write('profile', profileValue, 3))).rejects.toMatchObject({
+    code: '42501',
   })
-  await expect(
-    asUser(stranger, () => write('profile', makeSeed().profile, 3)),
-  ).rejects.toMatchObject({ code: '42501' })
   await expect(
     asUser(stranger, () =>
       db.query('insert into public.workspace_members(workspace_id,user_id,seat) values ($1,$2,2)', [
@@ -132,6 +207,7 @@ it('rejects anonymous, cross-space access, self-enrollment, and forged audit wri
     ),
   ).rejects.toMatchObject({ code: '42501' })
 })
+
 it('serializes same-day updates, rejects invalid values, and isolates preferences', async () => {
   const habit = {
     date: '2026-11-16',
@@ -151,23 +227,69 @@ it('serializes same-day updates, rejects invalid values, and isolates preference
     asUser(a, () => write('habit', { ...habit, water: 10001 }, 2)),
   ).rejects.toMatchObject({ code: '23514' })
   await asUser(a, () => write('settings', { showWeight: true }, null))
-  expect(await asUser(a, read)).toMatchObject({
+  const snapshot = await asUser(a, read)
+  expect(snapshot).toMatchObject({
     settings: { value: { showWeight: true } },
-    habits: [{ value: { water: 500 }, updatedBy: b }],
+    habits: [{ value: { water: 500 } }],
   })
+  expect(snapshot.habits[0].value.profileId).toBe(profile)
   expect(await asUser(b, read)).toMatchObject({ settings: null })
 })
-it('deduplicates retried workouts and blocks browser deletion', async () => {
-  const log = { ...makeSeed().workouts[0], id: '30000000-0000-0000-0000-000000000001' }
+
+it('stores per-set workout records, deduplicates retries, and blocks browser deletion', async () => {
+  const log = { ...seed.workouts[0], id: '30000000-0000-0000-0000-000000000001' }
   await asUser(a, () => write('workout', log, null))
-  const result = await asUser(a, () => write('workout', log, null))
-  expect(result).toMatchObject({ workouts: [{ value: { id: log.id }, createdBy: a }] })
+  const retried = await asUser(a, () => write('workout', log, null))
+  expect(retried).toMatchObject({ workouts: [{ value: { id: log.id }, createdBy: a }] })
+  const stored = retried.workouts[0].value as {
+    exercises: Array<{ sets: Array<{ reps: number; done: boolean }> }>
+  }
+  expect(stored.exercises[0].sets).toHaveLength(2)
+  expect(stored.exercises[0].sets[0]).toMatchObject({ reps: 10, done: true })
+
   await expect(
     asUser(b, () => write('workout', { ...log, minutes: 99 }, null)),
   ).rejects.toMatchObject({ code: '40001' })
   await expect(
+    asUser(b, () =>
+      write(
+        'workout',
+        {
+          ...log,
+          id: '30000000-0000-0000-0000-000000000002',
+          exercises: [{ ...log.exercises[0], sets: [{ reps: 10, load: 0 }] }],
+        },
+        null,
+      ),
+    ),
+  ).rejects.toMatchObject({ code: '23514' })
+  await expect(
     asUser(b, () => db.query('delete from public.workout_logs where id=$1', [log.id])),
   ).rejects.toMatchObject({ code: '42501' })
+})
+
+it('keeps exactly one active plan per profile', async () => {
+  const first = planPayload('40000000-0000-0000-0000-000000000001')
+  await asUser(a, () => write('plan', first, null))
+  let snapshot = await asUser(a, read)
+  expect(snapshot.plans).toHaveLength(1)
+  expect(snapshot.plans[0].value).toMatchObject({ status: 'active', profileId: profile })
+  expect((snapshot.plans[0].value as { days: unknown[] }).days).toHaveLength(7)
+
+  const second = planPayload('40000000-0000-0000-0000-000000000002')
+  await asUser(b, () => write('plan', second, null))
+  snapshot = await asUser(a, read)
+  const active = snapshot.plans.filter((row) => row.value.status === 'active')
+  expect(active).toHaveLength(1)
+  expect(active[0].value.id).toBe(second.id)
+  expect(snapshot.plans.some((row) => row.value.status === 'archived')).toBe(true)
+})
+
+it('rejects a malformed plan payload', async () => {
+  const broken = { ...planPayload('40000000-0000-0000-0000-000000000003'), days: [] }
+  await expect(asUser(a, () => write('plan', broken, null))).rejects.toMatchObject({
+    code: '23514',
+  })
 })
 
 it('removes data access when a workspace seat is revoked', async () => {
@@ -182,7 +304,7 @@ it('removes data access when a workspace seat is revoked', async () => {
         db.query('select id from public.health_profiles where workspace_id=$1', [space]),
       ),
     ).toMatchObject({ rows: [] })
-    await expect(asUser(b, () => write('profile', makeSeed().profile, 3))).rejects.toMatchObject({
+    await expect(asUser(b, () => write('profile', profileValue, 3))).rejects.toMatchObject({
       code: '42501',
     })
   } finally {

@@ -1,96 +1,237 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Play, Clock3, ShieldAlert, Check, ChevronDown } from 'lucide-react'
-import { useStore } from '../app/Store'
-import { plans, planExercises } from '../domain/catalog'
-import { Field } from '../components/UI'
-import { localDate } from '../domain/dates'
-import { workoutSchema } from '../domain/model'
+import {
+  ArrowLeft,
+  Check,
+  ChevronDown,
+  Clock3,
+  Play,
+  Repeat,
+  ShieldAlert,
+  Timer,
+  X,
+} from 'lucide-react'
+import { useProfile } from '../app/Store'
+import { Field, Modal } from '../components/UI'
+import { getExercise, isAvailable, exercises, type Exercise } from '../domain/exercises'
+import { suggest } from '../domain/engine'
+import { historyFor } from '../domain/stats'
+import { workoutSchema, type Performance, type SetRecord } from '../domain/model'
+import { displayDate } from '../domain/dates'
+
+type Draft = Performance
+
+function weekdayIndex(date: string): number {
+  return (new Date(`${date}T12:00:00`).getDay() + 6) % 7
+}
+
+function loadHint(exercise: Exercise): string {
+  if (exercise.equipment === '哑铃') return '重量 kg'
+  if (exercise.equipment === '弹力带') return '阻力档'
+  return '负重'
+}
+
 export default function Workout() {
-  const { id } = useParams(),
-    plan = plans.find((p) => p.id === id),
-    navigate = useNavigate(),
-    { data, commit, busy, cloud } = useStore()
-  const [active, setActive] = useState(false),
-    [feedback, setFeedback] = useState(false),
-    [discomfort, setDiscomfort] = useState(false),
-    [started, setStarted] = useState(0),
-    [logId, setLogId] = useState(''),
-    [seconds, setSeconds] = useState(0),
-    [difficulty, setDifficulty] = useState(5),
-    [feeling, setFeeling] = useState(''),
-    [error, setError] = useState(''),
-    [actual, setActual] = useState<
-      Record<string, { done: boolean; sets: number; reps: number; load: number }>
-    >({})
+  const { date = '' } = useParams()
+  const { active, profile, commit, busy, cloud, notify } = useProfile()
+  const navigate = useNavigate()
+  const plan = active.plan
+  const day = plan?.days[weekdayIndex(date)] ?? null
+
+  const [started, setStarted] = useState(false)
+  const [startedAt, setStartedAt] = useState(0)
+  const [seconds, setSeconds] = useState(0)
+  const [logId, setLogId] = useState('')
+  const [draft, setDraft] = useState<Draft[]>([])
+  const [difficulty, setDifficulty] = useState(5)
+  const [feeling, setFeeling] = useState('')
+  const [discomfort, setDiscomfort] = useState(false)
+  const [feedback, setFeedback] = useState(false)
+  const [error, setError] = useState('')
+  const [restUntil, setRestUntil] = useState(0)
+  const [restTotal, setRestTotal] = useState(0)
+  const [now, setNow] = useState(Date.now())
+  const [swapping, setSwapping] = useState<string | null>(null)
+
   useEffect(() => {
-    if (!active || feedback || discomfort) return
-    const timer = window.setInterval(
-      () => setSeconds(Math.floor((Date.now() - started) / 1000)),
-      1000,
-    )
-    const warn = (e: BeforeUnloadEvent) => {
-      e.preventDefault()
-    }
+    if (!started || feedback) return
+    const timer = window.setInterval(() => {
+      setSeconds(Math.floor((Date.now() - startedAt) / 1000))
+      setNow(Date.now())
+    }, 1000)
+    const warn = (event: BeforeUnloadEvent) => event.preventDefault()
     window.addEventListener('beforeunload', warn)
     return () => {
       window.clearInterval(timer)
       window.removeEventListener('beforeunload', warn)
     }
-  }, [active, feedback, discomfort, started])
-  if (!plan)
+  }, [started, feedback, startedAt])
+
+  const suggestions = useMemo(() => {
+    const result: Record<string, ReturnType<typeof suggest>> = {}
+    for (const row of draft) {
+      const exercise = getExercise(row.exerciseId)
+      if (!exercise || row.role === '放松') continue
+      result[row.exerciseId] = suggest({
+        exerciseId: row.exerciseId,
+        targetRepsMax: row.targetReps ?? 10,
+        equipment: exercise.equipment,
+        currentLoad: row.sets[0]?.load ?? 0,
+        history: historyFor(active.workouts, row.exerciseId),
+      })
+    }
+    return result
+  }, [draft, active.workouts])
+
+  if (!plan || !day)
     return (
       <div className="empty-state">
-        <h1>没有找到这份训练</h1>
+        <h1>今天没有安排训练</h1>
+        <p>先生成一份计划，或在训练页查看本周安排。</p>
         <Link className="button primary" to="/training">
           返回训练
         </Link>
       </div>
     )
-  const items = planExercises(plan),
-    completed = Object.values(actual).filter((v) => v.done).length
+
   function begin() {
-    if (!plan) return
-    setActual(
-      Object.fromEntries(
-        items.map((item) => [item.id, { done: false, sets: item.sets, reps: item.reps, load: 0 }]),
+    if (!day) return
+    const items: Draft[] = day.slots.map((slot) => {
+      const exercise = getExercise(slot.exerciseId)!
+      const history = historyFor(active.workouts, slot.exerciseId, 1)
+      const lastLoad = history[0]?.sets.at(-1)?.load ?? slot.startLoad
+      const reps =
+        slot.target.type === 'reps'
+          ? slot.target.min
+          : slot.target.type === 'hold'
+            ? slot.target.seconds
+            : 0
+      return {
+        exerciseId: slot.exerciseId,
+        name: exercise.name,
+        role: slot.role,
+        plannedSets: slot.sets,
+        targetReps: slot.target.type === 'reps' ? slot.target.min : null,
+        targetSeconds: slot.target.type === 'hold' ? slot.target.seconds : null,
+        replacedFrom: null,
+        sets: Array.from({ length: slot.sets }, () => ({
+          reps,
+          load: exercise.equipment === '徒手' ? 0 : lastLoad,
+          done: false,
+        })),
+      }
+    })
+    setDraft(items)
+    setStartedAt(Date.now())
+    setLogId(crypto.randomUUID())
+    setStarted(true)
+  }
+
+  function toggleSet(exerciseId: string, index: number) {
+    const row = draft.find((item) => item.exerciseId === exerciseId)
+    if (!row) return
+    const turningOn = !row.sets[index].done
+    setDraft((rows) =>
+      rows.map((item) =>
+        item.exerciseId === exerciseId
+          ? {
+              ...item,
+              sets: item.sets.map((set, i) => (i === index ? { ...set, done: !set.done } : set)),
+            }
+          : item,
       ),
     )
-    setStarted(Date.now())
-    setLogId(crypto.randomUUID())
-    setActive(true)
+    if (turningOn) {
+      const slot = day!.slots.find((item) => item.exerciseId === exerciseId)
+      const rest = slot?.restSeconds ?? 60
+      if (rest > 0) {
+        setRestUntil(Date.now() + rest * 1000)
+        setRestTotal(rest)
+        setNow(Date.now())
+      }
+    }
   }
+
+  function updateSet(exerciseId: string, index: number, patch: Partial<SetRecord>) {
+    setDraft((rows) =>
+      rows.map((row) =>
+        row.exerciseId === exerciseId
+          ? { ...row, sets: row.sets.map((set, i) => (i === index ? { ...set, ...patch } : set)) }
+          : row,
+      ),
+    )
+  }
+
+  function swap(exerciseId: string, replacementId: string) {
+    const replacement = getExercise(replacementId)
+    if (!replacement) return
+    setDraft((rows) =>
+      rows.map((row) =>
+        row.exerciseId === exerciseId
+          ? {
+              ...row,
+              exerciseId: replacement.id,
+              name: replacement.name,
+              replacedFrom: row.replacedFrom ?? exerciseId,
+              targetReps: replacement.dose.type === 'reps' ? replacement.dose.min : null,
+              targetSeconds: replacement.dose.type === 'hold' ? replacement.dose.seconds : null,
+              sets: row.sets.map((set) => ({ ...set, done: false })),
+            }
+          : row,
+      ),
+    )
+    setSwapping(null)
+    notify(`已替换为「${replacement.name}」，组次按新动作重置`)
+  }
+
+  const completed = draft.reduce(
+    (sum, row) => sum + row.sets.filter((set) => set.done && set.reps > 0).length,
+    0,
+  )
+  const planned = draft.reduce((sum, row) => sum + row.sets.length, 0)
+
   async function save() {
-    if (!plan) return
-    const parsed = workoutSchema.safeParse({
+    if (!plan || !day) return
+    const payload = {
+      profileId: active.id,
       id: logId,
-      date: localDate(new Date(started)),
+      date,
       planId: plan.id,
-      title: plan.title,
+      planVersion: plan.version,
+      title: day.focus,
       minutes: Math.round((seconds / 60) * 10) / 10,
       difficulty,
       discomfort,
       feeling,
-      createdAt: new Date(started).toISOString(),
-      exercises: items.map((item) => ({
-        id: item.id,
-        name: item.name,
-        sets: actual[item.id]?.done ? actual[item.id].sets : 0,
-        reps: actual[item.id]?.done ? actual[item.id].reps : 0,
-        load: actual[item.id]?.done ? (actual[item.id]?.load ?? 0) : 0,
-      })),
-    })
+      createdAt: new Date(startedAt).toISOString(),
+      exercises: draft,
+    }
+    const parsed = workoutSchema.safeParse(payload)
     if (!parsed.success) {
-      setError('请检查实际组数、次数和重量：需要填写范围内的数字。')
+      setError('请检查填写内容：次数需要是 0–100 的整数，负荷不超过 200。')
       return
     }
-    if (!discomfort && !completed) {
-      setError('请至少勾选一个完成的动作，或选择因不适停止；未完成的训练不会记为完成。')
+    if (!discomfort && completed === 0) {
+      setError('请至少完成一组，或选择「身体不适，停止训练」。')
       return
     }
     if (await commit({ kind: 'workout', value: parsed.data })) navigate('/records')
     else setError('训练记录未获保存确认，反馈已保留。')
   }
+
+  const restLeft = Math.max(0, Math.ceil((restUntil - now) / 1000))
+  const swappingRow = swapping ? draft.find((row) => row.exerciseId === swapping) : undefined
+  const swapPattern = swappingRow
+    ? getExercise(swappingRow.replacedFrom ?? swappingRow.exerciseId)?.pattern
+    : null
+  const swapPool = swappingRow
+    ? exercises
+        .filter((item) => item.pattern === swapPattern)
+        .filter((item) => isAvailable(item, profile.equipment))
+        .filter((item) => !draft.some((row) => row.exerciseId === item.id))
+        .slice(0, 8)
+    : []
+
   return (
     <>
       <Link to="/training" className="back-link">
@@ -98,48 +239,49 @@ export default function Workout() {
         返回训练
       </Link>
       <header className="workout-heading">
-        <h1>{plan.title}</h1>
-        <p>{plan.description}</p>
+        <h1>{day.focus}</h1>
+        <p>
+          {displayDate(date)} · {profile.name}
+        </p>
         <div className="inline-meta">
           <span>
             <Clock3 size={16} />
-            {plan.minutes} 分钟 · 模板示例
+            预计 {day.estimatedMinutes} 分钟 · 计划 v{plan.version}
           </span>
-          <span>{items.length} 个动作</span>
-          <span>{plan.equipment}</span>
+          <span>{draft.filter((row) => row.role === '主要').length} 个主要动作</span>
         </div>
       </header>
-      {!active ? (
+
+      {!started ? (
         <>
           <div className="notice-panel">
             <ShieldAlert size={21} />
-            <p>
-              此流程用于演示，不代表适合你的训练处方。开始实际运动前，请先确认身体限制及动作适用性；不适时停止。
-            </p>
+            <p>{day.warmup || '先做几分钟轻活动，让身体热起来。'}</p>
           </div>
-          {data.profile.restrictions.trim() ? (
+          {profile.restrictions.trim() ? (
             <div className="error-banner">
-              档案中有身体限制：{data.profile.restrictions}。本版本不提供适配或安全性判断。
+              档案中的身体限制：{profile.restrictions}。开始前请确认今天的动作是否适合。
             </div>
           ) : null}
           <button className="button primary" onClick={begin}>
             <Play size={17} />
-            开始体验训练
+            开始今天的训练
           </button>
+          <p className="demo-caption">离开此页面会丢失尚未保存的本次训练。</p>
         </>
       ) : (
         <div className="session-bar">
           <div>
-            <span>本次练习</span>
+            <span>本次训练</span>
             <strong>
               {String(Math.floor(seconds / 60)).padStart(2, '0')}:
               {String(seconds % 60).padStart(2, '0')}
             </strong>
           </div>
           <span>
-            {completed} / {items.length} 个动作
+            {completed} / {planned} 组
           </span>
-          {!feedback && !discomfort ? (
+          {!feedback ? (
             <button
               className="text-button danger"
               onClick={() => {
@@ -152,14 +294,19 @@ export default function Workout() {
           ) : null}
         </div>
       )}
-      {active && !feedback && discomfort ? (
-        <p className="error-banner" role="alert">
-          训练已停止，计时已暂停。这里只修正记录，请勿继续运动。
-        </p>
+
+      {restLeft > 0 && !feedback ? (
+        <div className="rest-timer" role="status">
+          <Timer size={18} />
+          <span>
+            组间休息 {restLeft} 秒 / 共 {restTotal} 秒
+          </span>
+          <button className="text-button" onClick={() => setRestUntil(0)}>
+            <X size={15} /> 跳过
+          </button>
+        </div>
       ) : null}
-      {active && !feedback ? (
-        <p className="demo-caption">仅勾选实际完成的动作。离开此页面会丢失尚未保存的本次训练。</p>
-      ) : null}
+
       {feedback ? (
         <section className="panel feedback">
           <h2>听一听身体的反馈</h2>
@@ -174,14 +321,14 @@ export default function Workout() {
               min="1"
               max="10"
               value={difficulty}
-              onChange={(e) => setDifficulty(Number(e.target.value))}
+              onChange={(event) => setDifficulty(Number(event.target.value))}
             />
           </Field>
           <label className="check-line">
             <input
               type="checkbox"
               checked={discomfort}
-              onChange={(e) => setDiscomfort(e.target.checked)}
+              onChange={(event) => setDiscomfort(event.target.checked)}
             />
             训练中有疼痛、头晕或其他不适
           </label>
@@ -191,14 +338,11 @@ export default function Workout() {
               rows={3}
               placeholder="记录精力、感受，或者今天的小发现……"
               value={feeling}
-              onChange={(e) => setFeeling(e.target.value)}
+              onChange={(event) => setFeeling(event.target.value)}
             />
           </Field>
           <p>
-            实际计时 {Math.round((seconds / 60) * 10) / 10} 分钟 ·{' '}
-            {completed === items.length
-              ? '全部动作已勾选'
-              : `已勾选 ${completed} 个动作，将保留实际完成情况。`}
+            实际计时 {Math.round((seconds / 60) * 10) / 10} 分钟 · 已完成 {completed} / {planned} 组
           </p>
           {error ? (
             <p className="form-error" role="alert">
@@ -206,98 +350,137 @@ export default function Workout() {
             </p>
           ) : null}
           <div className="actions">
-            <button className="button primary" disabled={busy} onClick={save}>
+            <button className="button primary" disabled={busy} onClick={() => void save()}>
               {busy ? '正在保存…' : cloud ? '保存共享训练记录' : '保存本机训练记录'}
             </button>
             <button className="button secondary" onClick={() => setFeedback(false)}>
-              {discomfort ? '修正动作记录' : '继续填写动作'}
+              继续记录
             </button>
           </div>
         </section>
-      ) : (
+      ) : started ? (
         <section className="exercise-list" aria-label="动作列表">
-          {items.map((item, index) => (
-            <article key={item.id} className="exercise-row">
-              <div className="exercise-main">
-                <span className="exercise-number">{String(index + 1).padStart(2, '0')}</span>
-                <div>
-                  <h2>{item.name}</h2>
-                  <p>
-                    {item.area} · {item.sets} 组 × {item.reps} 次 · 组间休息 {item.rest} 秒
+          {draft.map((row, index) => {
+            const exercise = getExercise(row.exerciseId)
+            if (!exercise) return null
+            const hint = suggestions[row.exerciseId]
+            return (
+              <article key={`${row.exerciseId}-${index}`} className="exercise-row">
+                <div className="exercise-main">
+                  <span className="exercise-number">{String(index + 1).padStart(2, '0')}</span>
+                  <div>
+                    <h2>
+                      {row.name}
+                      {exercise.unilateral ? <em className="soft-label">单侧</em> : null}
+                    </h2>
+                    <p>
+                      {exercise.pattern} · {row.plannedSets} 组
+                      {row.targetReps ? ` × ${row.targetReps} 次` : ''}
+                      {row.targetSeconds ? ` × ${row.targetSeconds} 秒` : ''}
+                      {row.replacedFrom ? ' · 已替换' : ''}
+                    </p>
+                  </div>
+                </div>
+                <div className="set-grid">
+                  {row.sets.map((set, i) => (
+                    <div key={i} className={set.done ? 'set-cell done' : 'set-cell'}>
+                      <button
+                        className="completion-check"
+                        aria-label={`${row.name} 第 ${i + 1} 组完成`}
+                        aria-pressed={set.done}
+                        onClick={() => toggleSet(row.exerciseId, i)}
+                      >
+                        <Check size={15} />
+                      </button>
+                      <label>
+                        <span>{row.targetSeconds ? '秒' : '次'}</span>
+                        <input
+                          type="number"
+                          min="0"
+                          max={row.targetSeconds ? 600 : 100}
+                          value={Number.isNaN(set.reps) ? '' : set.reps}
+                          onChange={(event) =>
+                            updateSet(row.exerciseId, i, {
+                              reps: event.target.value === '' ? 0 : Number(event.target.value),
+                            })
+                          }
+                        />
+                      </label>
+                      <label>
+                        <span>{loadHint(exercise)}</span>
+                        <input
+                          type="number"
+                          min="0"
+                          max="200"
+                          step="0.5"
+                          value={Number.isNaN(set.load) ? '' : set.load}
+                          onChange={(event) =>
+                            updateSet(row.exerciseId, i, {
+                              load: event.target.value === '' ? 0 : Number(event.target.value),
+                            })
+                          }
+                        />
+                      </label>
+                    </div>
+                  ))}
+                </div>
+                {hint && hint.kind !== 'collect' ? (
+                  <p className="suggestion">
+                    <Repeat size={14} /> {hint.reason}
                   </p>
-                </div>
-                {active ? (
-                  <label className="completion-check">
-                    <input
-                      type="checkbox"
-                      aria-label={`${item.name}已完成`}
-                      checked={actual[item.id]?.done ?? false}
-                      onChange={(e) =>
-                        setActual({
-                          ...actual,
-                          [item.id]: { ...actual[item.id], done: e.target.checked },
-                        })
-                      }
-                    />
-                    <Check size={18} />
-                  </label>
                 ) : null}
-              </div>
-              {active ? (
-                <div className="actual-fields">
-                  {(['sets', 'reps', 'load'] as const).map((key, i) => (
-                    <Field key={key} label={['实际组数', '每组次数', '重量（kg）'][i]}>
-                      <input
-                        type="number"
-                        min="0"
-                        max={key === 'sets' ? 10 : key === 'reps' ? 100 : 200}
-                        step={key === 'load' ? 0.5 : 1}
-                        value={
-                          Number.isNaN(actual[item.id]?.[key]) ? '' : (actual[item.id]?.[key] ?? 0)
-                        }
-                        onChange={(e) =>
-                          setActual({
-                            ...actual,
-                            [item.id]: {
-                              ...actual[item.id],
-                              [key]: e.target.value === '' ? NaN : Number(e.target.value),
-                            },
-                          })
-                        }
-                      />
-                    </Field>
-                  ))}
-                </div>
-              ) : null}
-              <details>
-                <summary>
-                  动作说明与注意事项
-                  <ChevronDown size={15} />
-                </summary>
-                <ol>
-                  {item.steps.map((step) => (
-                    <li key={step}>{step}</li>
-                  ))}
-                </ol>
-                <p>{item.note}</p>
-                <p>
-                  <strong>替代动作示例：</strong>
-                  {item.alternative}（不自动替换，需先确认适用性）
-                </p>
-              </details>
-            </article>
-          ))}
+                <details>
+                  <summary>
+                    动作说明与注意事项
+                    <ChevronDown size={15} />
+                  </summary>
+                  <ol>
+                    {exercise.steps.map((step) => (
+                      <li key={step}>{step}</li>
+                    ))}
+                  </ol>
+                  <p>{exercise.cues.join('；')}</p>
+                  <p>常见误差：{exercise.errors.join('；')}</p>
+                  <p>{exercise.cautions.join('；')}</p>
+                </details>
+                {row.role === '主要' ? (
+                  <button className="text-button" onClick={() => setSwapping(row.exerciseId)}>
+                    <Repeat size={14} /> 换个动作
+                  </button>
+                ) : null}
+              </article>
+            )
+          })}
         </section>
-      )}
-      {active && !feedback ? (
+      ) : null}
+
+      {started && !feedback ? (
         <button className="button primary full-button" onClick={() => setFeedback(true)}>
-          {discomfort ? '返回训练反馈' : '结束并填写反馈'}
+          结束并填写反馈
           <ArrowLeft className="rotate-arrow" size={17} />
         </button>
       ) : null}
-      <p className="demo-caption">
-        示例动作组数与次数仅用于测试页面流程。不会自动调整计划或增加负荷。
-      </p>
+
+      {swapping && swappingRow ? (
+        <Modal title={`替换「${swappingRow.name}」`} onClose={() => setSwapping(null)}>
+          <p>同一动作模式、由你的器械可完成的替代动作。替换后组次按新动作重置。</p>
+          {swapPool.length ? (
+            <div className="check-group">
+              {swapPool.map((item) => (
+                <button
+                  key={item.id}
+                  className="button secondary"
+                  onClick={() => swap(swappingRow.exerciseId, item.id)}
+                >
+                  {item.name} · {item.equipment} · {item.level}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p>没有其他可用动作。</p>
+          )}
+        </Modal>
+      ) : null}
     </>
   )
 }

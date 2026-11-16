@@ -15,6 +15,7 @@ const config = resolveConfig(
 const CloudGate = lazy(() => import('./cloud/CloudGate'))
 const Training = lazy(() => import('./pages/Training')),
   Workout = lazy(() => import('./pages/Workout')),
+  Exercises = lazy(() => import('./pages/Exercises')),
   Records = lazy(() => import('./pages/Records')),
   Growth = lazy(() => import('./pages/Growth')),
   Me = lazy(() => import('./pages/Me'))
@@ -31,7 +32,8 @@ export default function App() {
         <Route element={<Shell />}>
           <Route index element={<Home />} />
           <Route path="training" element={<Training />} />
-          <Route path="training/:id" element={<Workout />} />
+          <Route path="training/session/:date" element={<Workout />} />
+          <Route path="exercises" element={<Exercises />} />
           <Route path="records" element={<Records />} />
           <Route path="growth" element={<Growth />} />
           <Route path="me" element={<Me />} />

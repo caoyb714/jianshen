@@ -2448,3 +2448,299 @@ legend {
     font-size: 23px;
   }
 }
+
+/* ── 阶段 3：计划、逐组记录、动作库 ─────────────────────────────────────── */
+
+.profile-switch {
+  display: flex;
+  gap: 4px;
+  background: #f4edea;
+  border-radius: 9px;
+  padding: 3px;
+}
+.profile-switch button {
+  min-height: 30px;
+  padding: 3px 11px;
+  border-radius: 6px;
+  font-size: 11px;
+  color: #7d6570;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.profile-switch button[aria-pressed='true'] {
+  background: #fff;
+  color: var(--rose);
+  box-shadow: 0 2px 6px #7143570b;
+}
+.segmented.wrap {
+  flex-wrap: wrap;
+  width: 100%;
+  margin-bottom: 8px;
+}
+.week-days small {
+  font-size: 10px;
+  color: var(--muted);
+}
+.slot-list {
+  list-style: none;
+  padding: 0;
+  margin: 14px 0;
+  display: grid;
+  gap: 2px;
+}
+.slot-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--border);
+}
+.slot-row:last-child {
+  border-bottom: 0;
+}
+.slot-row h3 {
+  font-size: 14px;
+  margin: 0 0 2px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.slot-row p {
+  font-size: 11.5px;
+  color: var(--muted);
+  margin: 0;
+}
+.slot-row .exercise-number {
+  font-size: 13px;
+  width: 42px;
+  min-width: 42px;
+  text-align: center;
+  color: #8c6b7b;
+}
+.set-grid {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0 6px;
+  padding-left: 62px;
+}
+.set-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px;
+  border: 1px dashed var(--border);
+  border-radius: 11px;
+  background: #fffdfc;
+}
+.set-cell.done {
+  border-style: solid;
+  border-color: #cfdcc4;
+  background: #f7faf3;
+}
+.set-cell label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+.set-cell input {
+  width: 62px;
+  min-height: 32px;
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  font-size: 13px;
+}
+.suggestion {
+  display: flex;
+  gap: 7px;
+  align-items: flex-start;
+  font-size: 11.5px;
+  color: #6b7a5e;
+  background: var(--sage);
+  border-radius: 9px;
+  padding: 9px 12px;
+  margin: 8px 0 8px 62px;
+}
+.rest-timer {
+  position: sticky;
+  top: 8px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 16px;
+  margin: 14px 0;
+  border-radius: 12px;
+  background: #f3e7ec;
+  border: 1px solid #e4cfd7;
+  color: var(--rose-dark);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+.rest-timer .text-button {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.lib-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 14px;
+  margin: 16px 0;
+}
+.lib-card {
+  border: 1px solid var(--border);
+  background: #fffcfa;
+  border-radius: var(--radius);
+  padding: 17px 19px;
+}
+.lib-card header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.lib-card h2 {
+  font-size: 15px;
+  margin: 0;
+}
+.lib-tags {
+  font-size: 11px;
+  color: var(--muted);
+  margin: 7px 0 4px;
+}
+.lib-card details {
+  font-size: 12px;
+}
+.lib-card details ol {
+  padding-left: 18px;
+  margin: 8px 0;
+}
+.lib-card details p {
+  margin: 6px 0;
+}
+.search-line {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  padding: 0 12px;
+  background: #fff;
+  color: var(--muted);
+}
+.search-line input {
+  border: 0;
+  background: transparent;
+  min-height: 44px;
+  flex: 1;
+  outline: none;
+}
+@media (max-width: 720px) {
+  .set-grid {
+    padding-left: 0;
+  }
+  .suggestion {
+    margin-left: 0;
+  }
+  .profile-switch button {
+    max-width: 64px;
+  }
+}
+
+/* 逐组记录：勾选按钮改为 button + aria-pressed，需单独定义选中态 */
+.completion-check[aria-pressed='true'] {
+  background: #9baf95;
+  border-color: #9baf95;
+  color: #fff;
+}
+.completion-check[aria-pressed='true'] svg {
+  color: #fff;
+}
+.set-cell {
+  display: grid;
+  grid-template-columns: 38px 1fr 1fr;
+  align-items: end;
+  gap: 10px;
+}
+.set-cell label {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  white-space: nowrap;
+}
+.set-cell label span {
+  font-size: 9.5px;
+  letter-spacing: 0.02em;
+}
+.set-cell input {
+  width: 100%;
+}
+
+/* 四项统计在窄屏排成 2×2，避免落单 */
+@media (max-width: 720px) {
+  .growth-summary {
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+  .growth-summary > div:nth-child(2) {
+    border-right: 0;
+  }
+  .growth-summary > div {
+    padding: 8px 0;
+  }
+}
+.text-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.lib-card summary,
+.slot-row summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  list-style: none;
+  cursor: pointer;
+  min-height: 36px;
+}
+.lib-card summary::-webkit-details-marker,
+.slot-row summary::-webkit-details-marker {
+  display: none;
+}
+
+/* 档案位标签与切换胶囊：避免被 flex:1 拉伸 */
+.profile-card h2 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.profile-card h2 .soft-label {
+  font-size: 10px;
+  font-weight: 400;
+}
+.setting-row > .status-chip {
+  flex: 0 0 auto;
+  margin-left: auto;
+  min-width: 44px;
+  text-align: center;
+}
+.settings-section {
+  margin-top: 28px;
+}
+.small-muted svg {
+  vertical-align: -3px;
+  margin-right: 3px;
+}

@@ -1,15 +1,15 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Droplet, Moon, Activity, ArrowUpRight, Check, Dumbbell, ChevronDown } from 'lucide-react'
-import { useStore } from '../app/Store'
+import { useProfile } from '../app/Store'
 import { PageHeading, Field, MoodPicker, EmptyState, SectionHeading } from '../components/UI'
 import { emptyHabit } from '../domain/seed'
 import { metricSchema } from '../domain/model'
 import { displayDate } from '../domain/dates'
 import { isComplete } from '../domain/stats'
 export default function Records() {
-  const { data, today, setHabit, commit, adjustWater, ensureToday, busy } = useStore(),
-    habit = data.habits.find((h) => h.date === today) ?? emptyHabit(today)
+  const { active, today, setHabit, commit, adjustWater, ensureToday, busy, data } = useProfile(),
+    habit = active.habits.find((h) => h.date === today) ?? emptyHabit(active.id, today)
   const [sleep, setSleep] = useState(String(habit.sleep ?? '')),
     [water, setWater] = useState('250'),
     [weight, setWeight] = useState(''),
@@ -18,7 +18,7 @@ export default function Records() {
     [error, setError] = useState(''),
     [sleepError, setSleepError] = useState('')
   useEffect(() => {
-    const current = data.habits.find((h) => h.date === today)
+    const current = active.habits.find((h) => h.date === today)
     setSleep(String(current?.sleep ?? ''))
     setWeight('')
     setWaist('')
@@ -35,8 +35,9 @@ export default function Records() {
   }
   async function saveMetrics() {
     if (!ensureToday()) return
-    const existing = data.metrics.find((m) => m.date === today)
+    const existing = active.metrics.find((m) => m.date === today)
     const result = metricSchema.safeParse({
+      profileId: active.id,
       id: existing?.id ?? crypto.randomUUID(),
       date: today,
       weight: data.settings.showWeight
@@ -235,7 +236,7 @@ export default function Records() {
       </section>
       <SectionHeading title="最近的运动时光" />
       <div className="history-list">
-        {[...data.workouts]
+        {[...active.workouts]
           .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
           .slice(0, 30)
           .map((log) => (
@@ -257,22 +258,29 @@ export default function Records() {
               </summary>
               <div className="history-detail">
                 <p>{log.feeling || '没有填写感受。'}</p>
-                {log.exercises.map((e) => (
-                  <p key={e.id}>
-                    {e.name}：
-                    {e.sets > 0
-                      ? `${e.sets} 组 × ${e.reps} 次${e.load ? ` · ${e.load} kg` : ''}`
-                      : '未完成'}
-                  </p>
-                ))}
+                {log.exercises.map((row) => {
+                  const done = row.sets.filter((set) => set.done && set.reps > 0)
+                  return (
+                    <p key={`${row.exerciseId}-${row.name}`}>
+                      {row.name}：
+                      {done.length
+                        ? `${done.length} 组 · ${done.map((set) => set.reps).join('/')} 次${
+                            done.some((set) => set.load > 0)
+                              ? ` · ${done.map((set) => set.load).join('/')}`
+                              : ''
+                          }`
+                        : '未完成'}
+                    </p>
+                  )
+                })}
               </div>
             </details>
           ))}
       </div>
-      {data.workouts.length === 0 ? (
+      {active.workouts.length === 0 ? (
         <EmptyState title="还没有训练记录" description="不赶时间，从第一次小小的练习开始。">
           <Link className="button secondary" to="/training">
-            看看训练灵感
+            查看训练计划
           </Link>
         </EmptyState>
       ) : null}

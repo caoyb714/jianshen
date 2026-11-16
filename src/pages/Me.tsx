@@ -11,7 +11,7 @@ import {
   Heart,
   LogOut,
 } from 'lucide-react'
-import { useStore } from '../app/Store'
+import { useProfile } from '../app/Store'
 import { PageHeading, Modal } from '../components/UI'
 import ProfileForm from '../components/ProfileForm'
 import { makeSeed } from '../domain/seed'
@@ -25,15 +25,29 @@ function downloadText(value: string, name: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 export default function Me() {
-  const { data, today, error, commit, replace, notify, cloud, busy } = useStore(),
+  const {
+      active,
+      profile,
+      profiles,
+      switchProfile,
+      data,
+      today,
+      error,
+      commit,
+      replace,
+      notify,
+      cloud,
+      busy,
+    } = useProfile(),
     [editing, setEditing] = useState(false),
     [confirm, setConfirm] = useState<'clear' | 'reset' | null>(null),
     [install, setInstall] = useState(false)
+
   function exportData() {
     try {
       const value = cloud
         ? JSON.stringify(
-            { version: 1, exportedAt: new Date().toISOString(), ...cloud.snapshot },
+            { version: 2, exportedAt: new Date().toISOString(), ...cloud.snapshot },
             null,
             2,
           )
@@ -53,11 +67,21 @@ export default function Me() {
       notify('无法读取本机存储，未生成导出文件。')
     }
   }
+
   function confirmReset() {
-    const next =
-      confirm === 'reset' ? makeSeed() : { ...data, workouts: [], metrics: [], habits: [] }
+    if (confirm === 'reset') {
+      if (replace?.(makeSeed())) setConfirm(null)
+      return
+    }
+    const next = {
+      ...data,
+      workouts: data.workouts.filter((row) => row.profileId !== active.id),
+      metrics: data.metrics.filter((row) => row.profileId !== active.id),
+      habits: data.habits.filter((row) => row.profileId !== active.id),
+    }
     if (replace?.(next)) setConfirm(null)
   }
+
   return (
     <>
       <PageHeading
@@ -69,8 +93,11 @@ export default function Me() {
           <UserRound size={35} strokeWidth={1.3} />
         </div>
         <div>
-          <h2>{data.profile.name}</h2>
-          <p>{data.profile.goal}</p>
+          <h2>
+            {profile.name}
+            <span className="soft-label">档案位 {active.slot}</span>
+          </h2>
+          <p>{profile.goal}</p>
           <span className="soft-label">
             {cloud ? cloud.snapshot.workspaceName : '虚构示例档案 · 本机使用'}
           </span>
@@ -80,28 +107,61 @@ export default function Me() {
           编辑身体档案
         </button>
       </section>
+
+      <section className="settings-section">
+        <h2>这份空间里的两个档案</h2>
+        <p className="small-muted">
+          双方都能查看和填写这两个档案。你负责记录，她负责查看与执行时，切到她的档案即可。
+        </p>
+        {profiles.map((slot) => (
+          <button
+            key={slot.id}
+            className="setting-row setting-button"
+            aria-pressed={slot.id === active.id}
+            onClick={() => void switchProfile(slot.id)}
+          >
+            <UserRound size={21} />
+            <span>
+              <strong>
+                档案位 {slot.slot} · {slot.profile?.name ?? '尚未建立'}
+              </strong>
+              <small>
+                {slot.profile
+                  ? `${slot.profile.experience} · 每周 ${slot.profile.weeklyDays} 天`
+                  : '点这里切过去并建立档案'}
+              </small>
+            </span>
+            <span className="status-chip">{slot.id === active.id ? '当前' : '切换'}</span>
+          </button>
+        ))}
+        {profiles.every((slot) => slot.profile) ? null : (
+          <p className="small-muted">切到空档案位后会显示建立表单。</p>
+        )}
+      </section>
+
       <section className="profile-facts">
         <div>
           <span>年龄 / 身高</span>
           <strong>
-            {data.profile.age} 岁 / {data.profile.height} cm
+            {profile.age} 岁 / {profile.height} cm
           </strong>
         </div>
         <div>
           <span>运动经验</span>
-          <strong>{data.profile.experience}</strong>
+          <strong>{profile.experience}</strong>
         </div>
         <div>
           <span>每周可用时间</span>
           <strong>
-            {data.profile.weeklyDays} 天 · 每次 {data.profile.sessionMinutes} 分钟
+            {profile.weeklyDays} 天 · 每次 {profile.sessionMinutes} 分钟
           </strong>
         </div>
         <div>
           <span>家里的器械</span>
-          <strong>{data.profile.equipment.join('、')}</strong>
+          <strong>{profile.equipment.join('、')}</strong>
         </div>
       </section>
+
       <section className="settings-section">
         <h2>按你的方式使用</h2>
         <div className="setting-row">
@@ -153,13 +213,14 @@ export default function Me() {
           </div>
         ) : null}
       </section>
+
       <section className="settings-section">
         <h2>数据由你掌握</h2>
         <button className="setting-row setting-button" onClick={exportData}>
           <Download size={21} />
           <span>
             <strong>{cloud ? '导出共享记录' : '导出本机数据'}</strong>
-            <small>JSON 格式 · 包含档案、身体指标与全部记录</small>
+            <small>JSON 格式 · 包含档案、身体指标、训练记录与计划</small>
           </span>
           <ChevronRight size={18} />
         </button>
@@ -195,8 +256,8 @@ export default function Me() {
             <button className="setting-row setting-button" onClick={() => setConfirm('clear')}>
               <Trash2 size={21} />
               <span>
-                <strong>清空本机记录</strong>
-                <small>清空运动、习惯和身体指标，保留档案及偏好</small>
+                <strong>清空当前档案的记录</strong>
+                <small>只清空档案位 {active.slot} 的运动、习惯与指标，保留档案与计划</small>
               </span>
               <ChevronRight size={18} />
             </button>
@@ -204,28 +265,31 @@ export default function Me() {
               <RefreshCw size={21} />
               <span>
                 <strong>重新加载示例</strong>
-                <small>替换当前档案与记录，回到最初的演示状态</small>
+                <small>替换全部档案与记录，回到最初的演示状态</small>
               </span>
               <ChevronRight size={18} />
             </button>
           </>
         )}
       </section>
+
       <div className="privacy-note">
         <ShieldCheck size={25} />
         <div>
           <h3>{cloud ? '共享空间的权限' : '现在，只属于这台浏览器'}</h3>
           <p>
             {cloud
-              ? '空间成员可以查看和修改共享健康档案。导出的 JSON 含个人数据，请妥善保管。'
+              ? '空间成员可以查看和修改两个共享档案。导出的 JSON 含个人数据，请妥善保管。'
               : '当前数据保存在浏览器本地，未加密，也不会共享给另一人。浏览器清理数据可能移除记录，请勿在演示模式录入真实敏感信息。'}
           </p>
         </div>
       </div>
+
       <div className="made-with">
         <Heart size={15} />
         HerFit · 给彼此，也给自己，一点温柔。
       </div>
+
       {editing ? (
         <Modal title="编辑身体档案" onClose={() => setEditing(false)}>
           <ProfileForm onSaved={() => setEditing(false)} />
@@ -233,13 +297,13 @@ export default function Me() {
       ) : null}
       {confirm ? (
         <Modal
-          title={confirm === 'clear' ? '清空这些本机记录？' : '重新加载全部示例？'}
+          title={confirm === 'clear' ? '清空这个档案的记录？' : '重新加载全部示例？'}
           onClose={() => setConfirm(null)}
         >
           <p>
             {confirm === 'clear'
-              ? '运动、习惯和身体指标将从当前浏览器移除；档案与偏好保留。'
-              : '当前档案、偏好与记录将被虚构示例替换。'}
+              ? `档案位 ${active.slot} 的运动、习惯和身体指标将被移除；档案、计划与偏好保留。`
+              : '当前全部档案、偏好与记录将被虚构示例替换。'}
             此操作无法在应用内撤销，请先导出需要保留的数据。
           </p>
           <div className="actions">

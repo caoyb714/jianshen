@@ -9,17 +9,20 @@ import {
   ChevronRight,
   Leaf,
 } from 'lucide-react'
-import { useStore } from '../app/Store'
+import { useProfile } from '../app/Store'
 import { PageHeading, MoodPicker } from '../components/UI'
 import { emptyHabit } from '../domain/seed'
 import { weekDates } from '../domain/dates'
 import { isComplete } from '../domain/stats'
 export default function Home() {
-  const { data, today, setHabit, adjustWater, busy, cloud } = useStore(),
-    habit = data.habits.find((h) => h.date === today) ?? emptyHabit(today),
+  const { active, profile, today, setHabit, adjustWater, busy, cloud } = useProfile(),
+    habit = active.habits.find((h) => h.date === today) ?? emptyHabit(active.id, today),
     dates = weekDates(new Date(`${today}T12:00:00`)),
-    done = new Set(data.workouts.filter(isComplete).map((w) => w.date)),
-    count = dates.filter((d) => done.has(d)).length
+    done = new Set(active.workouts.filter(isComplete).map((w) => w.date)),
+    count = dates.filter((d) => done.has(d)).length,
+    todayIndex = (new Date(`${today}T12:00:00`).getDay() + 6) % 7,
+    todayPlan = active.plan?.days[todayIndex] ?? null,
+    todayMinutes = todayPlan?.estimatedMinutes ?? profile.sessionMinutes
   return (
     <>
       <PageHeading title="慢慢来，也在变好。" description="照顾好身体，也照顾好自己。" />
@@ -32,14 +35,25 @@ export default function Home() {
         <div className="hero-copy">
           <h2>
             今天，给自己
-            <br className="mobile-break" /> 25 分钟
+            <br className="mobile-break" /> {todayMinutes} 分钟
           </h2>
-          <p>舒展身体，让生活轻盈一点。</p>
-          <Link className="button primary" to="/training/full">
-            查看今日训练
+          <p>
+            {todayPlan
+              ? todayPlan.kind === '训练'
+                ? `${todayPlan.focus} · ${done.has(today) ? '今天已完成' : '还没有开始'}`
+                : todayPlan.note
+              : '生成一份计划，就知道今天该练什么。'}
+          </p>
+          <Link
+            className="button primary"
+            to={todayPlan?.kind === '训练' ? `/training/session/${today}` : '/training'}
+          >
+            {todayPlan?.kind === '训练' ? '开始今日训练' : '查看训练计划'}
             <ArrowRight size={18} />
           </Link>
-          <span className="hero-footnote">全身力量 · 入门示例 · 自由调整节奏</span>
+          <span className="hero-footnote">
+            {todayPlan ? `${todayPlan.focus} · 计划 v${active.plan?.version ?? 1}` : '尚未建立计划'}
+          </span>
         </div>
       </section>
       <section className="week-strip" aria-label="本周训练">
@@ -48,7 +62,7 @@ export default function Home() {
           <div>
             <h2>本周运动日</h2>
             <span>
-              <strong>{count}</strong> / {data.profile.weeklyDays} 天
+              <strong>{count}</strong> / {profile.weeklyDays} 天
             </span>
           </div>
           <Link to="/records" className="icon-button" aria-label="查看本周运动记录">
@@ -124,7 +138,7 @@ export default function Home() {
       </section>
       <p className="demo-caption">
         {cloud
-          ? '健康记录保存在共享空间，训练模板仍供体验。'
+          ? '健康记录保存在共享空间，两位成员都能查看。'
           : '你正在体验虚构示例档案。修改只保存在当前浏览器，可在「我的」中清空。'}
       </p>
     </>

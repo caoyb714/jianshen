@@ -8,16 +8,18 @@ import {
   Tooltip,
   CartesianGrid,
 } from 'recharts'
-import { Sprout, Clock3, Moon } from 'lucide-react'
-import { useStore } from '../app/Store'
+import { Sprout, Clock3, Moon, Dumbbell } from 'lucide-react'
+import { useProfile } from '../app/Store'
 import { PageHeading, EmptyState, SectionHeading } from '../components/UI'
-import { summarize } from '../domain/stats'
+import { summarize, weekProgress } from '../domain/stats'
 import { displayDate } from '../domain/dates'
 export default function Growth() {
-  const { data, today, cloud } = useStore(),
+  const { active, profile, today, cloud, data } = useProfile(),
     [days, setDays] = useState(7),
     [view, setView] = useState<'minutes' | 'sleep' | 'energy'>('minutes'),
-    summary = summarize(data, days, new Date(`${today}T12:00:00`))
+    summary = summarize(active, days, new Date(`${today}T12:00:00`)),
+    week = weekProgress(active, new Date(`${today}T12:00:00`)),
+    target = active.plan?.days.filter((day) => day.kind === '训练').length ?? profile.weeklyDays
   const labels = { minutes: '运动分钟', sleep: '睡眠小时', energy: '精力评分' },
     colors = { minutes: '#A45C75', sleep: '#83749E', energy: '#6B876D' }
   return (
@@ -59,7 +61,35 @@ export default function Growth() {
             <small> 小时</small>
           </strong>
         </div>
+        <div>
+          <Dumbbell size={25} />
+          <span>训练容量</span>
+          <strong>
+            {Math.round(summary.volume).toLocaleString()}
+            <small> 次·kg</small>
+          </strong>
+        </div>
       </div>
+      <section className="panel">
+        <div className="section-heading">
+          <h2>本周完成情况</h2>
+          <span className="soft-label">{profile.name}</span>
+        </div>
+        <p className="small-muted">
+          本周已完成 <strong>{week.doneCount}</strong> / {target} 次计划训练。计划是起点，不是考核。
+        </p>
+        <div className="week-days">
+          {week.perDay.map((day, index) => (
+            <div key={day.date} className={day.date === today ? 'today' : ''}>
+              <span>周{['一', '二', '三', '四', '五', '六', '日'][index]}</span>
+              <span className={day.done ? 'day-dot complete' : 'day-dot'}>
+                {day.done ? '✓' : Number(day.date.slice(8))}
+              </span>
+              <small>{day.minutes ? `${day.minutes}分` : ''}</small>
+            </div>
+          ))}
+        </div>
+      </section>
       <section className="panel chart-panel">
         <div className="section-heading">
           <h2>属于你的节奏</h2>
@@ -144,7 +174,7 @@ export default function Growth() {
         </p>
       </div>
       <SectionHeading title="身体记录" />
-      {data.metrics.length ? (
+      {active.metrics.length ? (
         <div className="data-table panel">
           <table>
             <thead>
@@ -156,7 +186,7 @@ export default function Growth() {
               </tr>
             </thead>
             <tbody>
-              {[...data.metrics]
+              {[...active.metrics]
                 .sort((a, b) => b.date.localeCompare(a.date))
                 .map((item) => (
                   <tr key={item.id}>

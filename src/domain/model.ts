@@ -13,6 +13,10 @@ const day = z
     )
   }, '日期无效')
 const number = (min: number, max: number) => z.number().min(min).max(max)
+const uuid = z
+  .string()
+  .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, '记录标识无效')
+
 export const profileSchema = z.object({
   name: z.string().trim().min(1, '请输入昵称').max(20, '昵称最多 20 字'),
   age: number(18, 100),
@@ -28,7 +32,9 @@ export const profileSchema = z.object({
   restrictions: z.string().max(500),
   restrictionsConfirmed: z.boolean().refine((v) => v, '请主动确认身体限制'),
 })
+
 export const habitSchema = z.object({
+  profileId: z.string(),
   date: day,
   water: number(0, 10000),
   sleep: number(0, 24).nullable(),
@@ -37,65 +43,125 @@ export const habitSchema = z.object({
   protein: z.boolean(),
   plants: z.boolean(),
 })
+
 export const metricSchema = z.object({
+  profileId: z.string(),
   id: z.string(),
   date: day,
   weight: number(20, 400).nullable(),
   waist: number(30, 250).nullable(),
   hip: number(30, 250).nullable(),
 })
+
+/** 单组实际完成情况。逐组记录是渐进负荷判断的唯一依据。 */
+export const setSchema = z.object({
+  reps: number(0, 100).int(),
+  load: number(0, 200),
+  done: z.boolean(),
+})
+
+export const performanceSchema = z.object({
+  exerciseId: z.string().max(100),
+  name: z.string().max(100),
+  role: z.enum(['主要', '放松']),
+  plannedSets: number(0, 10).int(),
+  targetReps: z.number().int().min(0).max(200).nullable(),
+  targetSeconds: z.number().int().min(0).max(600).nullable(),
+  replacedFrom: z.string().max(100).nullable(),
+  sets: z.array(setSchema).max(12),
+})
+
 export const workoutSchema = z.object({
-  id: z.string(),
+  profileId: z.string(),
+  id: uuid,
   date: day,
-  planId: z.string(),
+  planId: z.string().max(100),
+  planVersion: z.number().int().min(0),
   title: z.string().max(100),
   minutes: number(0, 240),
   difficulty: number(1, 10).int(),
   discomfort: z.boolean(),
   feeling: z.string().max(500),
   createdAt: z.string(),
-  exercises: z.array(
-    z.object({
-      id: z.string(),
-      name: z.string(),
-      sets: number(0, 10).int(),
-      reps: number(0, 100).int(),
-      load: number(0, 200),
-    }),
-  ),
+  exercises: z.array(performanceSchema).max(30),
 })
+
+export const slotTargetSchema = z.union([
+  z.object({ type: z.literal('reps'), min: number(1, 100).int(), max: number(1, 100).int() }),
+  z.object({ type: z.literal('hold'), seconds: number(1, 600).int() }),
+  z.object({
+    type: z.literal('time'),
+    minMinutes: number(1, 120).int(),
+    maxMinutes: number(1, 120).int(),
+  }),
+])
+
+export const planSlotSchema = z.object({
+  exerciseId: z.string().max(100),
+  role: z.enum(['主要', '放松']),
+  sets: number(1, 10).int(),
+  target: slotTargetSchema,
+  restSeconds: number(0, 300).int(),
+  startLoad: number(0, 200),
+})
+
+export const planDaySchema = z.object({
+  index: number(0, 6).int(),
+  kind: z.enum(['训练', '恢复', '休息']),
+  focus: z.string().max(40),
+  warmup: z.string().max(200),
+  slots: z.array(planSlotSchema).max(12),
+  estimatedMinutes: number(0, 240).int(),
+  note: z.string().max(200),
+})
+
+export const planInputSchema = z.object({
+  age: number(18, 100),
+  experience: z.enum(['刚刚开始', '偶尔运动', '规律运动']),
+  weeklyDays: number(1, 7).int(),
+  sessionMinutes: number(10, 90).int(),
+  equipment: z.array(z.enum(['徒手', '哑铃', '弹力带'])).min(1),
+  restrictions: z.string().max(500),
+})
+
+export const trainingPlanSchema = z.object({
+  profileId: z.string(),
+  id: uuid,
+  version: z.number().int().min(1),
+  generatedAt: z.string(),
+  confirmedAt: z.string().nullable(),
+  status: z.enum(['active', 'archived']),
+  input: planInputSchema,
+  days: z.array(planDaySchema).length(7),
+  notes: z.array(z.string().max(300)).max(10),
+})
+
+export const profileSlotSchema = z.object({
+  id: z.string(),
+  slot: z.union([z.literal(1), z.literal(2)]),
+  profile: profileSchema.nullable(),
+})
+
 export const dataSchema = z.object({
-  version: z.literal(1),
-  profile: profileSchema,
+  version: z.literal(2),
+  profiles: z.array(profileSlotSchema).min(1).max(2),
   habits: z.array(habitSchema),
   metrics: z.array(metricSchema),
   workouts: z.array(workoutSchema),
+  plans: z.array(trainingPlanSchema),
   settings: z.object({ showWeight: z.boolean() }),
 })
+
 export type Profile = z.infer<typeof profileSchema>
 export type Habit = z.infer<typeof habitSchema>
-export type Workout = z.infer<typeof workoutSchema>
-export type AppData = z.infer<typeof dataSchema>
 export type Metric = z.infer<typeof metricSchema>
-export type Exercise = {
-  id: string
-  name: string
-  area: string
-  equipment: string
-  sets: number
-  reps: number
-  rest: number
-  steps: string[]
-  note: string
-  alternative: string
-}
-export type Plan = {
-  id: string
-  title: string
-  description: string
-  type: string
-  minutes: number
-  equipment: string
-  color: string
-  exercises: string[]
-}
+export type SetRecord = z.infer<typeof setSchema>
+export type Performance = z.infer<typeof performanceSchema>
+export type Workout = z.infer<typeof workoutSchema>
+export type SlotTarget = z.infer<typeof slotTargetSchema>
+export type PlanSlot = z.infer<typeof planSlotSchema>
+export type PlanDay = z.infer<typeof planDaySchema>
+export type PlanInput = z.infer<typeof planInputSchema>
+export type TrainingPlan = z.infer<typeof trainingPlanSchema>
+export type ProfileSlot = z.infer<typeof profileSlotSchema>
+export type AppData = z.infer<typeof dataSchema>

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { StoreContext } from '../app/Store'
+import { ACTIVE_KEY, selectActive, StoreContext } from '../app/Store'
 import { ProfileEditor } from '../components/ProfileForm'
 import { localDate } from '../domain/dates'
 import { emptyHabit } from '../domain/seed'
@@ -15,6 +15,7 @@ type Props = {
   signOut: () => Promise<void>
   children: ReactNode
 }
+
 export function CloudWorkspace({ client, account, signOut, children }: Props) {
   const repository = useMemo(() => createRepository(client), [client])
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
@@ -22,9 +23,13 @@ export function CloudWorkspace({ client, account, signOut, children }: Props) {
   const [notice, notify] = useState('')
   const [busy, setBusy] = useState(false)
   const [today, setToday] = useState(localDate)
+  const [storedId, setStoredId] = useState(() => window.localStorage.getItem(ACTIVE_KEY) ?? '')
   const current = useRef<Snapshot | null>(null)
   const request = useRef(0)
   const inFlight = useRef<'read' | 'write' | null>(null)
+  // 数据库只预置了一个档案位时，补一个待创建的槽位，首次保存会插入新行
+  const pendingId = useRef(crypto.randomUUID()).current
+
   const keep = useCallback((next: Snapshot | null) => {
     current.current = next
     setSnapshot(next)
@@ -80,6 +85,19 @@ export function CloudWorkspace({ client, account, signOut, children }: Props) {
     return () => window.clearTimeout(timer)
   }, [notice])
 
+  const data = useMemo(
+    () => (snapshot ? toAppData(snapshot, pendingId) : null),
+    [snapshot, pendingId],
+  )
+  const activeId = useMemo(() => {
+    if (!data) return ''
+    return data.profiles.some((row) => row.id === storedId) ? storedId : data.profiles[0].id
+  }, [data, storedId])
+  const active = useMemo(
+    () => (data && activeId ? selectActive(data, activeId) : null),
+    [data, activeId],
+  )
+
   async function commit(change: Change, formRevision?: number) {
     if (!navigator.onLine) {
       notify('当前离线，未保存。请联网后再试。')
@@ -91,7 +109,7 @@ export function CloudWorkspace({ client, account, signOut, children }: Props) {
     setBusy(true)
     notify('')
     try {
-      const fresh = await repository.save(current.current, change, formRevision)
+      const fresh = await repository.save(current.current, change, formRevision, activeId)
       if (id !== request.current) return false
       keep(fresh)
       setError(null)
@@ -121,6 +139,13 @@ export function CloudWorkspace({ client, account, signOut, children }: Props) {
     }
   }
 
+  async function switchProfile(id: string) {
+    if (!data?.profiles.some((row) => row.id === id)) return false
+    setStoredId(id)
+    window.localStorage.setItem(ACTIVE_KEY, id)
+    return true
+  }
+
   function ensureToday() {
     const date = localDate()
     if (date === today) return true
@@ -128,24 +153,23 @@ export function CloudWorkspace({ client, account, signOut, children }: Props) {
     notify('日期已变化，请重新确认今天的记录。')
     return false
   }
-  async function setHabit(patch: Partial<Habit>) {
-    if (!ensureToday()) return false
-    const habit =
-      current.current?.habits.find((row) => row.value.date === today)?.value ?? emptyHabit(today)
+  async function setHabit(patch: Partial<Omit<Habit, 'profileId' | 'date'>>) {
+    if (!ensureToday() || !active) return false
+    const habit = active.habits.find((row) => row.date === today) ?? emptyHabit(active.id, today)
     return commit({ kind: 'habit', value: { ...habit, ...patch, date: today } })
   }
   async function adjustWater(delta: number) {
+    if (!active) return false
     const date = localDate()
     setToday(date)
-    const habit =
-      current.current?.habits.find((row) => row.value.date === date)?.value ?? emptyHabit(date)
+    const habit = active.habits.find((row) => row.date === date) ?? emptyHabit(active.id, date)
     return commit({
       kind: 'habit',
       value: { ...habit, water: Math.max(0, Math.min(10000, habit.water + delta)) },
     })
   }
 
-  if (!snapshot)
+  if (!snapshot || !data || !active)
     return (
       <CloudCard title="共享空间">
         <p role={error ? 'alert' : 'status'}>{error ?? '正在读取共享空间…'}</p>
@@ -161,27 +185,48 @@ export function CloudWorkspace({ client, account, signOut, children }: Props) {
         </div>
       </CloudCard>
     )
-  const data = toAppData(snapshot)
-  if (!data)
+
+  if (!active.profile) {
+    const other = data.profiles.find((row) => row.id !== active.id && row.profile)
+    const revision = snapshot.profiles.find((row) => row.id === active.id)?.profile.revision ?? null
     return (
-      <CloudCard title="建立共享健康档案">
-        <p>这份档案由两位空间成员共同查看和编辑。请在档案本人同意后填写。</p>
+      <CloudCard title={`建立档案位 ${active.slot}`}>
+        <p>
+          这份档案由两位空间成员共同查看和编辑。请在档案本人同意后填写。
+          {active.slot === 1 ? '建议先建立主要使用者的档案。' : ''}
+        </p>
         <ProfileEditor
           cloud
-          onSubmit={(profile) =>
-            commit({ kind: 'profile', value: profile }, snapshot.profile.revision)
-          }
+          onSubmit={async (profile) => {
+            const saved = await commit(
+              { kind: 'profile', profileId: active.id, value: profile },
+              revision ?? undefined,
+            )
+            return saved
+          }}
         />
         {notice ? <p role="status">{notice}</p> : null}
-        <button className="button secondary" onClick={() => void signOut()}>
-          退出登录
-        </button>
+        <div className="actions">
+          {other ? (
+            <button className="button secondary" onClick={() => void switchProfile(other.id)}>
+              切换到已建立的档案
+            </button>
+          ) : null}
+          <button className="button secondary" onClick={() => void signOut()}>
+            退出登录
+          </button>
+        </div>
       </CloudCard>
     )
+  }
+
   return (
     <StoreContext.Provider
       value={{
         data,
+        profiles: data.profiles,
+        active,
+        switchProfile,
         today,
         error,
         notice,

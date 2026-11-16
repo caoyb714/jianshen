@@ -5,14 +5,17 @@ import { useStore } from '../app/Store'
 import { profileSchema, type Profile } from '../domain/model'
 import { Field } from './UI'
 export default function ProfileForm({ onSaved }: { onSaved: () => void }) {
-  const { data, commit, cloud } = useStore()
-  const [revision] = useState(cloud?.snapshot.profile.revision)
+  const { active, commit, cloud } = useStore()
+  const revision = cloud?.snapshot.profiles.find((row) => row.id === active.id)?.profile.revision
   return (
     <ProfileEditor
       cloud={Boolean(cloud)}
-      initial={data.profile}
+      initial={active.profile ?? undefined}
       onSubmit={async (profile) => {
-        const saved = await commit({ kind: 'profile', value: profile }, revision)
+        const saved = await commit(
+          { kind: 'profile', profileId: active.id, value: profile },
+          revision,
+        )
         if (saved) onSaved()
         return saved
       }}
