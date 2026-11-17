@@ -148,7 +148,7 @@ export default function Shell() {
       )}
       {refresh ? (
         <div className="update-toast" role="status">
-          <p>新版本已准备好。请先保存正在编辑的内容。</p>
+          <p>有新版本可用。更新只需几秒，训练进度已自动保存，不会丢。</p>
           <button onClick={() => void updateServiceWorker(true)}>更新并重新打开</button>
           <button onClick={() => setRefresh(false)}>稍后</button>
         </div>

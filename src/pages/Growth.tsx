@@ -13,7 +13,13 @@ import {
 import { Sprout, Clock3, Moon, Dumbbell } from 'lucide-react'
 import { useProfile } from '../app/Store'
 import { PageHeading, EmptyState, SectionHeading } from '../components/UI'
-import { exerciseProgress, metricSeries, summarize, weekProgress } from '../domain/stats'
+import {
+  exerciseProgress,
+  metricSeries,
+  summarize,
+  weekProgress,
+  weeklyReview,
+} from '../domain/stats'
 import { displayDate } from '../domain/dates'
 
 /**
@@ -35,6 +41,8 @@ export default function Growth() {
     [focus, setFocus] = useState<string | null>(null),
     summary = summarize(active, days, new Date(`${today}T12:00:00`)),
     week = weekProgress(active, new Date(`${today}T12:00:00`)),
+    // 复盘固定看最近 7 天，不跟随上方的 7/28 天切换
+    week7 = summarize(active, 7, new Date(`${today}T12:00:00`)),
     target = active.plan?.days.filter((day) => day.kind === '训练').length ?? profile.weeklyDays,
     metricRows = useMemo(() => metricSeries(active.metrics), [active.metrics]),
     progress = useMemo(() => {
@@ -55,6 +63,17 @@ export default function Growth() {
         )
     }, [active.workouts]),
     currentExercise = progress.find((item) => item.id === focus) ?? progress[0] ?? null,
+    review = weeklyReview({
+      activeDays: week7.activeDays,
+      targetDays: target,
+      sessions: week7.sessions,
+      minutes: week7.minutes,
+      sleepAverage: week7.sleepAverage,
+      waterAverage: (() => {
+        const rows = week7.series.filter((point) => point.water > 0)
+        return rows.length ? rows.reduce((sum, point) => sum + point.water, 0) / rows.length : null
+      })(),
+    }),
     // 徒手动作负荷恒为 0，此时改画完成次数
     exerciseUsesLoad = Boolean(currentExercise?.series.some((point) => point.topLoad > 0)),
     // 关闭体重显示后，即使之前选过体重也不画出来
@@ -75,6 +94,10 @@ export default function Growth() {
           ))}
         </div>
       </PageHeading>
+      <section className="panel review-panel">
+        <h2>本周复盘</h2>
+        <p>{review}</p>
+      </section>
       <div className="growth-summary">
         <div>
           <Sprout size={25} />

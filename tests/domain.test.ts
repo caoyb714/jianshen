@@ -5,7 +5,7 @@ import { getExercise, loadHint } from '../src/domain/exercises'
 import { readJson, removeKey, writeJson } from '../src/app/storage'
 import { loadData, saveData, STORAGE_KEY } from '../src/domain/repository'
 import { makeSeed, PROFILE_A } from '../src/domain/seed'
-import { summarize } from '../src/domain/stats'
+import { summarize, weeklyReview } from '../src/domain/stats'
 
 const source = (path: string) => readFileSync(new URL(`../src/${path}`, import.meta.url), 'utf8')
 
@@ -226,5 +226,34 @@ describe('derived progress', () => {
     ]
     expect(summarize(data, 7, date).sessions).toBe(0)
     expect(summarize(data, 7, date).minutes).toBe(5)
+  })
+})
+
+describe('周复盘', () => {
+  const base = { targetDays: 3, sessions: 2, minutes: 55, sleepAverage: 7.25, waterAverage: 1450 }
+
+  it('达标时给出保持的语气', () => {
+    const text = weeklyReview({ ...base, activeDays: 3 })
+    expect(text).toContain('这周练了 3 天（目标 3 天）')
+    expect(text).toContain('平均每次 28 分钟')
+    expect(text).toContain('睡眠平均 7.3 小时')
+    expect(text).toContain('饮水日均 1450 ml')
+    expect(text).toContain('节奏保持住就行')
+  })
+
+  it('未达标时不催促补练', () => {
+    expect(weeklyReview({ ...base, activeDays: 1 })).toContain('不用补练')
+  })
+
+  it('没有记录时只陈述事实', () => {
+    const text = weeklyReview({
+      activeDays: 0,
+      targetDays: 3,
+      sessions: 0,
+      minutes: 0,
+      sleepAverage: null,
+      waterAverage: null,
+    })
+    expect(text).toBe('这周还没有完成训练。从下一次开始就好。')
   })
 })

@@ -167,3 +167,38 @@ export function exerciseProgress(workouts: Workout[], exerciseId: string) {
       ]
     })
 }
+
+/**
+ * 一周复盘的一句话。
+ * 只陈述事实，不做好坏判断——这个产品不对身体下结论。
+ */
+export function weeklyReview(input: {
+  activeDays: number
+  targetDays: number
+  sessions: number
+  minutes: number
+  sleepAverage: number | null
+  waterAverage: number | null
+}): string {
+  const { activeDays, targetDays, sessions, minutes, sleepAverage, waterAverage } = input
+  const parts: string[] = []
+
+  if (activeDays === 0) parts.push('这周还没有完成训练')
+  else if (targetDays > 0) parts.push(`这周练了 ${activeDays} 天（目标 ${targetDays} 天）`)
+  else parts.push(`这周练了 ${activeDays} 天`)
+
+  if (sessions > 0)
+    parts.push(`共 ${Math.round(minutes)} 分钟，平均每次 ${Math.round(minutes / sessions)} 分钟`)
+  if (sleepAverage !== null) parts.push(`睡眠平均 ${sleepAverage.toFixed(1)} 小时`)
+  if (waterAverage !== null && waterAverage > 0)
+    parts.push(`饮水日均 ${Math.round(waterAverage)} ml`)
+
+  const tail =
+    activeDays === 0
+      ? '从下一次开始就好。'
+      : targetDays > 0 && activeDays >= targetDays
+        ? '节奏保持住就行。'
+        : '不用补练，接着往下走。'
+
+  return `${parts.join('；')}。${tail}`
+}

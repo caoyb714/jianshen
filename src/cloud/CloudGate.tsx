@@ -12,7 +12,9 @@ function getClient(config: Extract<CloudConfig, { mode: 'cloud' }>) {
       persistSession: true,
       autoRefreshToken: true,
       detectSessionInUrl: false,
-      storage: window.sessionStorage,
+      // 用 localStorage：手机从主屏幕打开 PWA 时 sessionStorage 会被清空，
+      // 等于每次都要重输密码。这是两台私人手机，不是共享设备。
+      storage: window.localStorage,
     },
     global: {
       fetch: async (input, init) => {

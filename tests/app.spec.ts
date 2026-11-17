@@ -230,3 +230,20 @@ test('discarding a session removes the draft for good', async ({ page }) => {
   await expect(page.getByText(/已恢复上次未保存的训练/)).toHaveCount(0)
   await expect(page.getByRole('button', { name: '开始今天的训练' })).toBeVisible()
 })
+
+test('rest duration is adjustable and a skipped exercise survives reload', async ({ page }) => {
+  await startSession(page)
+  await expect(page.getByLabel('组间休息时长')).toBeVisible()
+  await page.getByLabel('组间休息时长').selectOption('30')
+  await page.getByRole('button', { name: '今天跳过' }).first().click()
+  await expect(page.getByRole('button', { name: '恢复这个动作' }).first()).toBeVisible()
+  await page.reload()
+  await expect(page.getByRole('button', { name: '恢复这个动作' }).first()).toBeVisible()
+})
+
+test('weekly review states facts on the growth page', async ({ page }) => {
+  await page.goto('/growth')
+  const panel = page.locator('.review-panel')
+  await expect(panel).toBeVisible()
+  await expect(panel).toContainText('这周练了')
+})

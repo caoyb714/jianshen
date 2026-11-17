@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
   ArrowLeft,
@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 import { useProfile } from '../app/Store'
 import { readJson, removeKey, writeJson } from '../app/storage'
+import { playRestChime, unlockAudio } from '../app/sound'
 import { Field, Modal } from '../components/UI'
 import { getExercise, isAvailable, loadHint, exercises } from '../domain/exercises'
 import { suggest } from '../domain/engine'
@@ -23,6 +24,8 @@ import { displayDate, weekdayIndex } from '../domain/dates'
 type Draft = Performance
 
 const DRAFT_KEY = 'herfit.workoutDraft.v1'
+const REST_PREF_KEY = 'herfit.restPref.v1'
+const REST_CHOICES = ['30', '45', '60', '90', '120'] as const
 
 type StoredDraft = {
   profileId: string
@@ -35,6 +38,8 @@ type StoredDraft = {
   feeling: string
   discomfort: boolean
   exercises: Draft[]
+  /** 本次主动跳过的动作；只存在于本机草稿，不写进训练记录 */
+  skipped: string[]
 }
 
 function readStoredDraft(): StoredDraft | null {
@@ -77,6 +82,9 @@ export default function Workout() {
   const [feeling, setFeeling] = useState(restored?.feeling ?? '')
   const [discomfort, setDiscomfort] = useState(restored?.discomfort ?? false)
   const [discarding, setDiscarding] = useState(false)
+  const [skipped, setSkipped] = useState<string[]>(restored?.skipped ?? [])
+  const [restPref, setRestPref] = useState<string>(() => readJson<string>(REST_PREF_KEY) ?? 'auto')
+  const chimeFired = useRef(false)
   const [feedback, setFeedback] = useState(false)
   const [error, setError] = useState('')
   const [restUntil, setRestUntil] = useState(0)
@@ -112,6 +120,7 @@ export default function Workout() {
       feeling,
       discomfort,
       exercises: draft,
+      skipped,
     }
     // 隐私模式或存储已满时写入失败，界面照常工作
     writeJson(DRAFT_KEY, value)
@@ -127,7 +136,18 @@ export default function Workout() {
     feeling,
     discomfort,
     draft,
+    skipped,
   ])
+
+  // 休息结束响一声；到点后立刻把 restUntil 归零，避免每秒重复触发
+  useEffect(() => {
+    if (!restUntil) return
+    if (now < restUntil) return
+    if (chimeFired.current) return
+    chimeFired.current = true
+    playRestChime()
+    setRestUntil(0)
+  }, [now, restUntil])
 
   const suggestions = useMemo(() => {
     const result: Record<string, ReturnType<typeof suggest>> = {}
@@ -185,7 +205,9 @@ export default function Workout() {
         })),
       }
     })
+    unlockAudio()
     setDraft(items)
+    setSkipped([])
     setStartedAt(Date.now())
     setLogId(crypto.randomUUID())
     setStarted(true)
@@ -206,8 +228,9 @@ export default function Workout() {
       ),
     )
     if (turningOn) {
+      unlockAudio()
       const slot = day!.slots.find((item) => item.exerciseId === exerciseId)
-      const rest = slot?.restSeconds ?? 60
+      const rest = restPref === 'auto' ? (slot?.restSeconds ?? 60) : Number(restPref)
       if (rest > 0) {
         setRestUntil(Date.now() + rest * 1000)
         setRestTotal(rest)
@@ -224,6 +247,23 @@ export default function Workout() {
           : row,
       ),
     )
+  }
+
+  function toggleSkip(exerciseId: string) {
+    setSkipped((ids) =>
+      ids.includes(exerciseId) ? ids.filter((id) => id !== exerciseId) : [...ids, exerciseId],
+    )
+  }
+
+  /** 这个动作上次做到的最好一组，用来判断今天该加还是该保持 */
+  function previousFor(exerciseId: string) {
+    const last = historyFor(active.workouts, exerciseId, 1)[0]
+    if (!last) return null
+    // historyFor 只返回已完成且有次数的组，这里不再判断 done
+    const done = last.sets.filter((set) => set.reps > 0)
+    if (!done.length) return null
+    const top = done.reduce((best, set) => (set.load > best.load ? set : best), done[0])
+    return { load: top.load, reps: top.reps, date: last.date }
   }
 
   function swap(exerciseId: string, replacementId: string) {
@@ -252,7 +292,10 @@ export default function Workout() {
     (sum, row) => sum + row.sets.filter((set) => set.done && set.reps > 0).length,
     0,
   )
-  const planned = draft.reduce((sum, row) => sum + row.sets.length, 0)
+  const planned = draft.reduce(
+    (sum, row) => sum + (skipped.includes(row.exerciseId) ? 0 : row.sets.length),
+    0,
+  )
 
   async function save() {
     if (!plan || !day) return
@@ -296,6 +339,7 @@ export default function Workout() {
     setFeeling('')
     setDiscomfort(false)
     setFeedback(false)
+    setSkipped([])
     setError('')
     setDiscarding(false)
     notify('已放弃本次训练，未保存任何记录')
@@ -363,6 +407,25 @@ export default function Workout() {
           <span>
             {completed} / {planned} 组
           </span>
+          <label className="rest-pref">
+            <span>休息</span>
+            <select
+              value={restPref}
+              aria-label="组间休息时长"
+              onChange={(event) => {
+                setRestPref(event.target.value)
+                if (event.target.value === 'auto') removeKey(REST_PREF_KEY)
+                else writeJson(REST_PREF_KEY, event.target.value)
+              }}
+            >
+              <option value="auto">跟随动作</option>
+              {REST_CHOICES.map((seconds) => (
+                <option key={seconds} value={seconds}>
+                  {seconds} 秒
+                </option>
+              ))}
+            </select>
+          </label>
           {!feedback ? (
             <>
               <button
@@ -466,7 +529,12 @@ export default function Workout() {
             if (!exercise) return null
             const hint = suggestions[row.exerciseId]
             return (
-              <article key={`${row.exerciseId}-${index}`} className="exercise-row">
+              <article
+                key={`${row.exerciseId}-${index}`}
+                className={
+                  skipped.includes(row.exerciseId) ? 'exercise-row skipped' : 'exercise-row'
+                }
+              >
                 <div className="exercise-main">
                   <span className="exercise-number">{String(index + 1).padStart(2, '0')}</span>
                   <div>
@@ -479,7 +547,18 @@ export default function Workout() {
                       {row.targetReps ? ` × ${row.targetReps} 次` : ''}
                       {row.targetSeconds ? ` × ${row.targetSeconds} 秒` : ''}
                       {row.replacedFrom ? ' · 已替换' : ''}
+                      {skipped.includes(row.exerciseId) ? ' · 今天跳过' : ''}
                     </p>
+                    {previousFor(row.exerciseId) ? (
+                      <p className="last-time">
+                        上次{' '}
+                        {previousFor(row.exerciseId)!.load > 0
+                          ? `${previousFor(row.exerciseId)!.load} × ${previousFor(row.exerciseId)!.reps}`
+                          : `${previousFor(row.exerciseId)!.reps} 次`}
+                        {' · '}
+                        {previousFor(row.exerciseId)!.date.slice(5).replace('-', '/')}
+                      </p>
+                    ) : null}
                   </div>
                 </div>
                 <div className="set-grid">
@@ -544,11 +623,16 @@ export default function Workout() {
                   <p>常见误差：{exercise.errors.join('；')}</p>
                   <p>{exercise.cautions.join('；')}</p>
                 </details>
-                {row.role === '主要' ? (
-                  <button className="text-button" onClick={() => setSwapping(row.exerciseId)}>
-                    <Repeat size={14} /> 换个动作
+                <div className="row-actions">
+                  {row.role === '主要' ? (
+                    <button className="text-button" onClick={() => setSwapping(row.exerciseId)}>
+                      <Repeat size={14} /> 换个动作
+                    </button>
+                  ) : null}
+                  <button className="text-button" onClick={() => toggleSkip(row.exerciseId)}>
+                    {skipped.includes(row.exerciseId) ? '恢复这个动作' : '今天跳过'}
                   </button>
-                ) : null}
+                </div>
               </article>
             )
           })}
