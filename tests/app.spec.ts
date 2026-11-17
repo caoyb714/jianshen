@@ -176,3 +176,33 @@ test('an unconfirmed restriction blocks plan generation', async ({ page }) => {
   await expect(page.getByText('入门、低冲击')).toBeVisible()
   await expect(page.getByText('不能替代专业评估')).toBeVisible()
 })
+
+test('an interrupted session is restored after reload', async ({ page }) => {
+  await startSession(page)
+  await page
+    .getByRole('button', { name: /第 1 组完成/ })
+    .first()
+    .click()
+  const first = await page.locator('.exercise-row h2').first().innerText()
+  await page.reload()
+  await expect(page.getByText(/已恢复上次未保存的训练/)).toBeVisible()
+  await expect(page.locator('.exercise-row h2').first()).toHaveText(first)
+  await expect(page.getByRole('button', { name: /第 1 组完成/ }).first()).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  )
+})
+
+test('discarding a session removes the draft for good', async ({ page }) => {
+  await startSession(page)
+  await page
+    .getByRole('button', { name: /第 1 组完成/ })
+    .first()
+    .click()
+  await page.getByRole('button', { name: '放弃本次' }).click()
+  await page.getByRole('button', { name: '确认放弃' }).click()
+  await expect(page.getByRole('button', { name: '开始今天的训练' })).toBeVisible()
+  await page.reload()
+  await expect(page.getByText(/已恢复上次未保存的训练/)).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '开始今天的训练' })).toBeVisible()
+})

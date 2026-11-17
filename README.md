@@ -10,7 +10,15 @@
 
 **https://herfit-ec6.pages.dev** —— Cloudflare Pages，HTTPS，可添加到手机主屏幕。
 
-手机上打开后：iPhone 用 Safari「分享 → 添加到主屏幕」；Android 用 Chrome「菜单 → 安装应用」。账号见 `.env.setup.local` 同目录下的 `账号密码.local`。
+手机上打开后按系统选择安装方式（账号见 `账号密码.local`）：
+
+| 系统                      | 浏览器                     | 安装方式                     | 效果                   |
+| ------------------------- | -------------------------- | ---------------------------- | ---------------------- |
+| iOS                       | Safari                     | 分享 → 添加到主屏幕          | 完整 PWA：全屏、可离线 |
+| Android                   | Chrome / Edge / 三星浏览器 | 菜单 → 安装应用 / 添加到手机 | 完整 PWA               |
+| Android（无 Google 服务） | 自带浏览器、QQ、UC、夸克   | 菜单 → 添加到桌面            | 快捷方式，带地址栏     |
+
+**不要在微信内打开**：内置 WebView 会限制登录态与本地存储。
 
 重新部署：`npm run deploy`（需要先 `npx wrangler login`，并确保 `.env.local` 是云端模式）。
 

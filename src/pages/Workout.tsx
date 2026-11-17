@@ -21,6 +21,44 @@ import { displayDate } from '../domain/dates'
 
 type Draft = Performance
 
+const DRAFT_KEY = 'herfit.workoutDraft.v1'
+
+type StoredDraft = {
+  profileId: string
+  date: string
+  planId: string
+  planVersion: number
+  logId: string
+  startedAt: number
+  difficulty: number
+  feeling: string
+  discomfort: boolean
+  exercises: Draft[]
+}
+
+function readStoredDraft(): StoredDraft | null {
+  try {
+    const raw = localStorage.getItem(DRAFT_KEY)
+    if (!raw) return null
+    const value = JSON.parse(raw) as StoredDraft
+    if (!value || !Array.isArray(value.exercises) || value.exercises.length === 0) return null
+    const usable = value.exercises.every(
+      (row) => row && typeof row.exerciseId === 'string' && Array.isArray(row.sets),
+    )
+    return usable ? value : null
+  } catch {
+    return null
+  }
+}
+
+function clearStoredDraft() {
+  try {
+    localStorage.removeItem(DRAFT_KEY)
+  } catch {
+    /* 存储不可用时静默跳过，不影响本次训练 */
+  }
+}
+
 function weekdayIndex(date: string): number {
   return (new Date(`${date}T12:00:00`).getDay() + 6) % 7
 }
@@ -38,14 +76,25 @@ export default function Workout() {
   const plan = active.plan
   const day = plan?.days[weekdayIndex(date)] ?? null
 
-  const [started, setStarted] = useState(false)
-  const [startedAt, setStartedAt] = useState(0)
-  const [seconds, setSeconds] = useState(0)
-  const [logId, setLogId] = useState('')
-  const [draft, setDraft] = useState<Draft[]>([])
-  const [difficulty, setDifficulty] = useState(5)
-  const [feeling, setFeeling] = useState('')
-  const [discomfort, setDiscomfort] = useState(false)
+  // 只在首次渲染时读一次；档案、日期或计划版本不一致就丢弃旧草稿
+  const [restored] = useState(() => {
+    const stored = readStoredDraft()
+    if (!stored || !plan || stored.profileId !== active.id || stored.date !== date) return null
+    if (stored.planId !== plan.id || stored.planVersion !== plan.version) return null
+    return stored
+  })
+
+  const [started, setStarted] = useState(Boolean(restored))
+  const [startedAt, setStartedAt] = useState(restored?.startedAt ?? 0)
+  const [seconds, setSeconds] = useState(
+    restored ? Math.max(0, Math.floor((Date.now() - restored.startedAt) / 1000)) : 0,
+  )
+  const [logId, setLogId] = useState(restored?.logId ?? '')
+  const [draft, setDraft] = useState<Draft[]>(restored?.exercises ?? [])
+  const [difficulty, setDifficulty] = useState(restored?.difficulty ?? 5)
+  const [feeling, setFeeling] = useState(restored?.feeling ?? '')
+  const [discomfort, setDiscomfort] = useState(restored?.discomfort ?? false)
+  const [discarding, setDiscarding] = useState(false)
   const [feedback, setFeedback] = useState(false)
   const [error, setError] = useState('')
   const [restUntil, setRestUntil] = useState(0)
@@ -66,6 +115,28 @@ export default function Workout() {
       window.removeEventListener('beforeunload', warn)
     }
   }, [started, feedback, startedAt])
+
+  // 训练中的每一步都落盘，切到别的 App 或锁屏后回来不会丢
+  useEffect(() => {
+    if (!started || !plan || !logId) return
+    const value: StoredDraft = {
+      profileId: active.id,
+      date,
+      planId: plan.id,
+      planVersion: plan.version,
+      logId,
+      startedAt,
+      difficulty,
+      feeling,
+      discomfort,
+      exercises: draft,
+    }
+    try {
+      localStorage.setItem(DRAFT_KEY, JSON.stringify(value))
+    } catch {
+      /* 隐私模式或存储已满时忽略，界面不受影响 */
+    }
+  }, [started, plan, day, active.id, date, logId, startedAt, difficulty, feeling, discomfort, draft])
 
   const suggestions = useMemo(() => {
     const result: Record<string, ReturnType<typeof suggest>> = {}
@@ -215,8 +286,26 @@ export default function Workout() {
       setError('请至少完成一组，或选择「身体不适，停止训练」。')
       return
     }
-    if (await commit({ kind: 'workout', value: parsed.data })) navigate('/records')
-    else setError('训练记录未获保存确认，反馈已保留。')
+    if (await commit({ kind: 'workout', value: parsed.data })) {
+      clearStoredDraft()
+      navigate('/records')
+    } else setError('训练记录未获保存确认，反馈与进度已保留。')
+  }
+
+  function discard() {
+    clearStoredDraft()
+    setStarted(false)
+    setDraft([])
+    setStartedAt(0)
+    setSeconds(0)
+    setLogId('')
+    setDifficulty(5)
+    setFeeling('')
+    setDiscomfort(false)
+    setFeedback(false)
+    setError('')
+    setDiscarding(false)
+    notify('已放弃本次训练，未保存任何记录')
   }
 
   const restLeft = Math.max(0, Math.ceil((restUntil - now) / 1000))
@@ -267,7 +356,7 @@ export default function Workout() {
             <Play size={17} />
             开始今天的训练
           </button>
-          <p className="demo-caption">离开此页面会丢失尚未保存的本次训练。</p>
+          <p className="demo-caption">训练进度会自动保存在本机，中途离开或锁屏都不会丢。</p>
         </>
       ) : (
         <div className="session-bar">
@@ -282,18 +371,32 @@ export default function Workout() {
             {completed} / {planned} 组
           </span>
           {!feedback ? (
-            <button
-              className="text-button danger"
-              onClick={() => {
-                setDiscomfort(true)
-                setFeedback(true)
-              }}
-            >
-              身体不适，停止训练
-            </button>
+            <>
+              <button
+                className="text-button danger"
+                onClick={() => {
+                  setDiscomfort(true)
+                  setFeedback(true)
+                }}
+              >
+                身体不适，停止训练
+              </button>
+              <button className="text-button" onClick={() => setDiscarding(true)}>
+                放弃本次
+              </button>
+            </>
           ) : null}
         </div>
       )}
+
+      {restored && started && !feedback ? (
+        <div className="notice-panel" role="status">
+          <Clock3 size={18} />
+          <p>
+            已恢复上次未保存的训练（开始于 {new Date(restored.startedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}）。
+          </p>
+        </div>
+      ) : null}
 
       {restLeft > 0 && !feedback ? (
         <div className="rest-timer" role="status">
@@ -459,6 +562,20 @@ export default function Workout() {
           结束并填写反馈
           <ArrowLeft className="rotate-arrow" size={17} />
         </button>
+      ) : null}
+
+      {discarding ? (
+        <Modal title="放弃本次训练" onClose={() => setDiscarding(false)}>
+          <p>已完成的组次会全部丢弃，不会保存任何记录。此操作无法撤销。</p>
+          <div className="actions">
+            <button className="button danger" onClick={discard}>
+              确认放弃
+            </button>
+            <button className="button secondary" onClick={() => setDiscarding(false)}>
+              继续训练
+            </button>
+          </div>
+        </Modal>
       ) : null}
 
       {swapping && swappingRow ? (
