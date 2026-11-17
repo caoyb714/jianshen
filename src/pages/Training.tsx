@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   ArrowRight,
@@ -12,7 +12,9 @@ import {
   Sparkles,
 } from 'lucide-react'
 import { useProfile } from '../app/Store'
-import { PageHeading, EmptyState } from '../components/UI'
+import { requestExplain } from '../app/explain'
+import { readJson, writeJson } from '../app/storage'
+import { PageHeading, EmptyState, Modal } from '../components/UI'
 import {
   applyAdjustments,
   generatePlan,
@@ -21,13 +23,14 @@ import {
 } from '../domain/engine'
 import { reviewPlan } from '../domain/stats'
 import { getExercise, LIBRARY_REVIEWED } from '../domain/exercises'
+import { weekdayIndex } from '../domain/dates'
+import { AI_CONSENT_KEY, buildExplainPayload } from '../domain/ai'
 import type { PlanDay, TrainingPlan } from '../domain/model'
 
 const WEEK_LABELS = ['一', '二', '三', '四', '五', '六', '日']
 
-function weekdayIndex(date: string): number {
-  return (new Date(`${date}T12:00:00`).getDay() + 6) % 7
-}
+/** 说明有四种可见状态：未生成、生成中、成功、失败（失败只显示一行 muted 文案）。 */
+type ExplainState = { state: 'idle' | 'loading' | 'ok' | 'failed'; text: string }
 
 function targetText(day: PlanDay) {
   const main = day.slots.filter((slot) => slot.role === '主要')
@@ -40,8 +43,16 @@ export default function Training() {
   const plan = active.plan
   const [draft, setDraft] = useState<Extract<EngineResult, { ok: true }> | null>(null)
   const [busy, setBusy] = useState(false)
+  const [explain, setExplain] = useState<ExplainState>({ state: 'idle', text: '' })
+  const [consentOpen, setConsentOpen] = useState(false)
   const todayIndex = weekdayIndex(today)
   const todayPlan = plan?.days[todayIndex]
+
+  // 计划版本或日期变化后，旧说明描述的已经不是今天这份安排，直接清空
+  const planStamp = plan ? `${plan.id}:${plan.version}` : ''
+  useEffect(() => {
+    setExplain({ state: 'idle', text: '' })
+  }, [planStamp, today])
 
   const preview = useMemo(() => {
     if (!draft) return null
@@ -121,6 +132,32 @@ export default function Training() {
 
   const shown = preview ?? todayPlan
 
+  // 说明只解释已生效的计划，因此失败也不回写任何状态，训练流程完全不受影响
+  async function runExplain() {
+    if (!todayPlan || todayPlan.slots.length === 0) return
+    setExplain({ state: 'loading', text: '' })
+    const result = await requestExplain(
+      buildExplainPayload({ profile, day: todayPlan, workouts: active.workouts, today }),
+    )
+    setExplain(result.ok ? { state: 'ok', text: result.text } : { state: 'failed', text: '' })
+  }
+
+  function startExplain() {
+    // 同意标记写在本机；没标记过就先解释清楚要发什么，再让用户决定
+    if (readJson<boolean>(AI_CONSENT_KEY) === true) {
+      void runExplain()
+      return
+    }
+    setConsentOpen(true)
+  }
+
+  function approveExplain() {
+    // 存储不可用（隐私模式）时也继续生成：本次同意已经明确，不必二次打断
+    writeJson(AI_CONSENT_KEY, true)
+    setConsentOpen(false)
+    void runExplain()
+  }
+
   return (
     <>
       <PageHeading title="把时间留给身体。" description="不必练得很满，找到舒服的节奏就好。" />
@@ -178,6 +215,46 @@ export default function Training() {
           </Link>
         </div>
       )}
+
+      {/* 今日说明只是对已生效计划的人话解释：休息日没有动作可解释，因此不显示 */}
+      {plan && !draft && todayPlan && todayPlan.slots.length > 0 ? (
+        <section className="panel">
+          <div className="section-heading">
+            <h2>今日说明</h2>
+            <span className="soft-label">DeepSeek</span>
+          </div>
+          {explain.state === 'ok' ? (
+            <>
+              <p>{explain.text}</p>
+              <p className="small-muted">由 DeepSeek 生成，仅供参考；计划本身由本地规则决定。</p>
+              <button className="text-button" onClick={startExplain}>
+                重新生成
+              </button>
+            </>
+          ) : explain.state === 'loading' ? (
+            <button className="button secondary" disabled>
+              正在生成…
+            </button>
+          ) : explain.state === 'failed' ? (
+            // 静默降级：不报错、不重试、不触碰计划；给一个重新入口，避免只能刷新页面
+            <>
+              <p className="small-muted">暂时无法生成说明，训练计划不受影响。</p>
+              <button className="text-button" onClick={startExplain}>
+                重新生成说明
+              </button>
+            </>
+          ) : (
+            <>
+              <button className="button secondary" onClick={startExplain}>
+                生成今日说明
+              </button>
+              <p className="small-muted">
+                会把你档案里的年龄、经验、器械和今天的安排发送给 DeepSeek，不含昵称和邮箱。
+              </p>
+            </>
+          )}
+        </section>
+      ) : null}
 
       {plan && !draft && review.length > 0 ? (
         <section className="panel">
@@ -243,6 +320,26 @@ export default function Training() {
         <p className="demo-caption">
           <RotateCcw size={14} /> 完成第一次训练后，这里会给出负荷调整建议。
         </p>
+      ) : null}
+
+      {consentOpen ? (
+        <Modal title="把数据发送给 DeepSeek 生成说明" onClose={() => setConsentOpen(false)}>
+          <p>只会发送下面这些内容，不含昵称、邮箱和任何账号标识：</p>
+          <ul className="small-muted">
+            <li>档案：年龄、训练经验、每周天数、单次时长、可用器械、身体限制（最多 80 字）</li>
+            <li>今日：训练主题、预计时长，以及每个动作的名称、组数、目标和角色</li>
+            <li>近 7 天：完成次数、累计分钟数、平均难度</li>
+          </ul>
+          <p className="small-muted">说明只用于展示，不会写回计划，也不会存入数据库。</p>
+          <div className="actions">
+            <button className="button primary" onClick={approveExplain}>
+              同意并生成
+            </button>
+            <button className="button secondary" onClick={() => setConsentOpen(false)}>
+              取消
+            </button>
+          </div>
+        </Modal>
       ) : null}
     </>
   )

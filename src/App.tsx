@@ -40,6 +40,8 @@ export default function App() {
           <Route
             path="*"
             element={
+              // 不复用 EmptyState：404 是整页兜底，需要 <h1> 且只有一行按钮，
+              // EmptyState 固定 <h3>+description，替换会改变标题层级与间距
               <div className="empty-state">
                 <h1>这一页还没有留下足迹</h1>
                 <Link className="button primary" to="/">

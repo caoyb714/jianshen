@@ -1,5 +1,14 @@
 # 给下一位 AI 的交接说明
 
+## v0.6 新进展（可选 AI 说明，方案 A）
+
+- 训练页新增「今日说明」：**只解释已经由规则引擎算好的当天计划**，不参与生成、不写库、不改任何数字。
+- `functions/api/explain.ts`（Cloudflare Pages Functions）：同源 `/api/explain` 代理 DeepSeek，Key 只从部署环境变量 `DEEPSEEK_API_KEY` 读取；未配置时返回 `not-configured`，界面静默隐藏说明能力。
+- `src/domain/ai.ts`：白名单式 payload（无昵称、邮箱、id、时间戳），`restrictions` 截断 80 字；纯函数，有单测。
+- 首次使用需在弹窗内同意，标记存 `localStorage` 的 `herfit.aiConsent.v1`；失败只显示一行提示，训练流程不受影响。
+- 部署前需执行 `wrangler pages secret put DEEPSEEK_API_KEY --project-name herfit-ec6`；未执行时线上功能自动降级。**本机 `npm run dev` 不包含 Functions，说明块会显示"暂时无法生成"。**
+- 注意：`docs/PRD.md` 与 `docs/SECURITY.md` 中「不接付费 AI」的表述已过时，需产品确认后再统一口径。
+
 ## v0.5 新进展（阶段 5 已完成 · 已上线）
 
 - 线上地址 **https://herfit-ec6.pages.dev**（Cloudflare Pages，HTTPS，PWA 可安装）。

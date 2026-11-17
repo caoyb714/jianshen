@@ -177,6 +177,30 @@ test('an unconfirmed restriction blocks plan generation', async ({ page }) => {
   await expect(page.getByText('不能替代专业评估')).toBeVisible()
 })
 
+test('explain failure degrades quietly without touching the plan', async ({ page }) => {
+  await ensurePlan(page)
+  const week = page.locator('.week-days.week-plan')
+  await expect(week).toBeVisible()
+  const before = await week.innerText()
+
+  // 本地开发没有 Pages Functions，/api/explain 必然 404：这正是在测降级路径
+  await page.getByRole('button', { name: '生成今日说明' }).click()
+  await page.getByRole('dialog').getByRole('button', { name: '同意并生成' }).click()
+  await expect(page.getByText('暂时无法生成说明，训练计划不受影响。')).toBeVisible()
+
+  // 不弹错误横幅、不改周计划、不拦训练入口
+  await expect(page.getByRole('alert')).toHaveCount(0)
+  // 用 innerText 精确比对：toHaveText 会把空白折叠，看不出格子结构是否被改动
+  expect(await week.innerText()).toBe(before)
+  await expect(page.getByRole('link', { name: '开始今天的训练' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '重新生成计划' })).toBeVisible()
+
+  // 说明失败后仍可正常进入打卡
+  await page.getByRole('link', { name: '开始今天的训练' }).click()
+  await page.getByRole('button', { name: '开始今天的训练' }).click()
+  await expect(page.getByText('本次训练')).toBeVisible()
+})
+
 test('an interrupted session is restored after reload', async ({ page }) => {
   await startSession(page)
   await page

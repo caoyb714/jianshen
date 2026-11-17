@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { localDate, weekDates } from '../src/domain/dates'
-import { loadData, saveData } from '../src/domain/repository'
+import { readFileSync } from 'node:fs'
+import { localDate, weekDates, weekdayIndex } from '../src/domain/dates'
+import { getExercise, loadHint } from '../src/domain/exercises'
+import { readJson, removeKey, writeJson } from '../src/app/storage'
+import { loadData, saveData, STORAGE_KEY } from '../src/domain/repository'
 import { makeSeed, PROFILE_A } from '../src/domain/seed'
 import { summarize } from '../src/domain/stats'
+
+const source = (path: string) => readFileSync(new URL(`../src/${path}`, import.meta.url), 'utf8')
 
 function memory(initial: string | null = null) {
   let value = initial
@@ -16,6 +21,140 @@ function memory(initial: string | null = null) {
     },
   }
 }
+describe('weekdayIndex 单一实现', () => {
+  // 重构前 Training.tsx 与 Workout.tsx 各自内联了一份完全相同的换算：
+  // (new Date(`${date}T12:00:00`).getDay() + 6) % 7
+  const original = (date: string) => (new Date(`${date}T12:00:00`).getDay() + 6) % 7
+
+  it('周一为 0、周日为 6，且与重构前的内联实现逐日等价', () => {
+    expect(weekdayIndex('2026-11-16')).toBe(0) // 周一
+    expect(weekdayIndex('2026-11-17')).toBe(1)
+    expect(weekdayIndex('2026-11-21')).toBe(5) // 周六
+    expect(weekdayIndex('2026-11-22')).toBe(6) // 周日
+    for (let offset = 0; offset < 14; offset += 1) {
+      const date = new Date(2026, 10, 16 + offset, 12)
+      const text = localDate(date)
+      expect(weekdayIndex(text)).toBe(original(text))
+      expect(weekdayIndex(text)).toBeGreaterThanOrEqual(0)
+      expect(weekdayIndex(text)).toBeLessThanOrEqual(6)
+    }
+  })
+
+  it('跨月、跨年与闰日都与内联实现一致', () => {
+    for (const date of [
+      '2026-10-31', // 周六，月末
+      '2026-11-01', // 周日，跨月
+      '2026-12-01', // 周二，跨月
+      '2026-12-31', // 周四，年末
+      '2027-01-01', // 周五，跨年
+      '2028-02-29', // 闰日
+      '2024-03-01', // 闰年 2 月之后
+    ])
+      expect(weekdayIndex(date)).toBe(original(date))
+  })
+
+  it('两个页面都只引用 dates.ts 的实现，没有各留一份', () => {
+    for (const page of ['pages/Training.tsx', 'pages/Workout.tsx']) {
+      const text = source(page)
+      expect(text).toMatch(/import \{[^}]*weekdayIndex[^}]*\} from '\.\.\/domain\/dates'/)
+      expect(text).not.toContain('function weekdayIndex')
+      expect(text).not.toContain('% 7')
+    }
+  })
+})
+
+describe('loadHint 按器械给出口径', () => {
+  it('哑铃写重量 kg、弹力带写阻力档、其余写负重', () => {
+    const dumbbell = getExercise('goblet-squat')
+    const band = getExercise('band-squat')
+    const bodyweight = getExercise('bodyweight-squat')
+    if (!dumbbell || !band || !bodyweight) throw new Error('动作库夹具缺失')
+    expect(loadHint(dumbbell)).toBe('重量 kg')
+    expect(loadHint(band)).toBe('阻力档')
+    expect(loadHint(bodyweight)).toBe('负重')
+  })
+
+  it('Workout 页面复用同一个实现，没有本地副本', () => {
+    const text = source('pages/Workout.tsx')
+    expect(text).toMatch(/import \{[^}]*loadHint[^}]*\} from '\.\.\/domain\/exercises'/)
+    expect(text).not.toContain('function loadHint')
+    expect(text).not.toContain('阻力档')
+  })
+})
+
+describe('storage.ts 的降级行为', () => {
+  it('隐私模式下存储抛错不崩溃，读返回 null、写与删返回 false', () => {
+    const broken = {
+      getItem: () => {
+        throw new Error('SecurityError')
+      },
+      setItem: () => {
+        throw new Error('SecurityError')
+      },
+      removeItem: () => {
+        throw new Error('SecurityError')
+      },
+    }
+    expect(() => readJson('k', broken)).not.toThrow()
+    expect(readJson('k', broken)).toBeNull()
+    expect(writeJson('k', { a: 1 }, broken)).toBe(false)
+    expect(removeKey('k', broken)).toBe(false)
+  })
+
+  it('存储整体不可用时同样安静降级', () => {
+    expect(readJson('k', null)).toBeNull()
+    expect(writeJson('k', 1, null)).toBe(false)
+    expect(removeKey('k', null)).toBe(false)
+  })
+
+  it('读写往返与损坏内容', () => {
+    let value: string | null = null
+    const memory = {
+      getItem: () => value,
+      setItem: (_key: string, next: string) => {
+        value = next
+      },
+      removeItem: () => {
+        value = null
+      },
+    }
+    expect(writeJson('k', { a: 1 }, memory)).toBe(true)
+    expect(readJson('k', memory)).toEqual({ a: 1 })
+    value = '{broken'
+    expect(readJson('k', memory)).toBeNull()
+    expect(removeKey('k', memory)).toBe(true)
+    expect(value).toBeNull()
+  })
+})
+
+describe('本机存储键名保持不变', () => {
+  it('三个既有键名逐字未改', () => {
+    expect(STORAGE_KEY).toBe('herfit.demo.v2')
+    expect(source('pages/Workout.tsx')).toContain("const DRAFT_KEY = 'herfit.workoutDraft.v1'")
+    expect(source('app/Store.tsx')).toContain("export const ACTIVE_KEY = 'herfit.activeProfile'")
+  })
+})
+
+describe('Growth 图表配置提取后数值不变', () => {
+  // 对照 git diff：抽取前三个图表各自内联，取值必须逐字一致，否则视觉会悄悄漂移
+  it('margin / 网格 / 坐标轴 / Tooltip 取值与重构前完全相同', () => {
+    const text = source('pages/Growth.tsx')
+    const compact = text.replace(/\s+/g, ' ')
+    for (const expected of [
+      'const CHART_MARGIN = { top: 12, right: 15, left: -20, bottom: 0 }',
+      "strokeDasharray: '3 5', vertical: false, stroke: '#EDE5E7'",
+      "fill: '#73636D', fontSize: 12",
+      "border: '1px solid #E7DADF', borderRadius: 12, color: '#494047'",
+    ])
+      expect(compact).toContain(expected)
+    // 三张图都必须引用同一套常量，不允许任何一处回退成内联字面量
+    expect(compact.match(/margin=\{CHART_MARGIN\}/g)).toHaveLength(3)
+    expect(compact.match(/<CartesianGrid \{\.\.\.GRID_PROPS\} \/>/g)).toHaveLength(3)
+    expect(compact.match(/tick=\{AXIS_TICK\}/g)).toHaveLength(6)
+    expect(compact.match(/<Tooltip \{\.\.\.TOOLTIP_PROPS\}/g)).toHaveLength(3)
+  })
+})
+
 describe('local date boundaries', () => {
   it('uses local calendar date rather than UTC', () => {
     expect(localDate(new Date(2026, 10, 16, 0, 5))).toBe('2026-11-16')

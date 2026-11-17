@@ -15,6 +15,18 @@ import { useProfile } from '../app/Store'
 import { PageHeading, EmptyState, SectionHeading } from '../components/UI'
 import { exerciseProgress, metricSeries, summarize, weekProgress } from '../domain/stats'
 import { displayDate } from '../domain/dates'
+
+/**
+ * 三张图共用同一套网格、坐标轴与提示样式。
+ * 抽成常量只为一处维护；取值与原写法逐字一致，确保视觉零变化。
+ */
+const CHART_MARGIN = { top: 12, right: 15, left: -20, bottom: 0 }
+const GRID_PROPS = { strokeDasharray: '3 5', vertical: false, stroke: '#EDE5E7' }
+const AXIS_TICK = { fill: '#73636D', fontSize: 12 }
+const TOOLTIP_PROPS = {
+  contentStyle: { border: '1px solid #E7DADF', borderRadius: 12, color: '#494047' },
+}
+
 export default function Growth() {
   const { active, profile, today, cloud, data } = useProfile(),
     [days, setDays] = useState(7),
@@ -135,25 +147,22 @@ export default function Growth() {
           aria-label={`近${days}天${labels[view]}趋势，下方可展开每日数值`}
         >
           <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={summary.series} margin={{ top: 12, right: 15, left: -20, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 5" vertical={false} stroke="#EDE5E7" />
+            <AreaChart data={summary.series} margin={CHART_MARGIN}>
+              <CartesianGrid {...GRID_PROPS} />
               <XAxis
                 dataKey="label"
                 tickLine={false}
                 axisLine={false}
-                tick={{ fill: '#73636D', fontSize: 12 }}
+                tick={AXIS_TICK}
                 minTickGap={28}
               />
               <YAxis
                 tickLine={false}
                 axisLine={false}
-                tick={{ fill: '#73636D', fontSize: 12 }}
+                tick={AXIS_TICK}
                 domain={view === 'energy' ? [0, 5] : [0, 'auto']}
               />
-              <Tooltip
-                contentStyle={{ border: '1px solid #E7DADF', borderRadius: 12, color: '#494047' }}
-                formatter={(value) => [value, labels[view]]}
-              />
+              <Tooltip {...TOOLTIP_PROPS} formatter={(value) => [value, labels[view]]} />
               <Area
                 type="monotone"
                 dataKey={view}
@@ -239,30 +248,16 @@ export default function Growth() {
               </div>
               <div className="chart" role="img" aria-label={`${currentExercise.name} 的负荷变化`}>
                 <ResponsiveContainer width="100%" height="100%">
-                  <LineChart
-                    data={currentExercise.series}
-                    margin={{ top: 12, right: 15, left: -20, bottom: 0 }}
-                  >
-                    <CartesianGrid strokeDasharray="3 5" vertical={false} stroke="#EDE5E7" />
-                    <XAxis
-                      dataKey="label"
-                      tickLine={false}
-                      axisLine={false}
-                      tick={{ fill: '#73636D', fontSize: 12 }}
-                    />
+                  <LineChart data={currentExercise.series} margin={CHART_MARGIN}>
+                    <CartesianGrid {...GRID_PROPS} />
+                    <XAxis dataKey="label" tickLine={false} axisLine={false} tick={AXIS_TICK} />
                     <YAxis
                       tickLine={false}
                       axisLine={false}
-                      tick={{ fill: '#73636D', fontSize: 12 }}
+                      tick={AXIS_TICK}
                       domain={[0, 'auto']}
                     />
-                    <Tooltip
-                      contentStyle={{
-                        border: '1px solid #E7DADF',
-                        borderRadius: 12,
-                        color: '#494047',
-                      }}
-                    />
+                    <Tooltip {...TOOLTIP_PROPS} />
                     <Line
                       type="monotone"
                       dataKey={exerciseUsesLoad ? 'topLoad' : 'reps'}
@@ -305,23 +300,16 @@ export default function Growth() {
           </div>
           <div className="chart" role="img" aria-label="身体指标变化">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={metricRows} margin={{ top: 12, right: 15, left: -20, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 5" vertical={false} stroke="#EDE5E7" />
-                <XAxis
-                  dataKey="label"
-                  tickLine={false}
-                  axisLine={false}
-                  tick={{ fill: '#73636D', fontSize: 12 }}
-                />
+              <LineChart data={metricRows} margin={CHART_MARGIN}>
+                <CartesianGrid {...GRID_PROPS} />
+                <XAxis dataKey="label" tickLine={false} axisLine={false} tick={AXIS_TICK} />
                 <YAxis
                   tickLine={false}
                   axisLine={false}
-                  tick={{ fill: '#73636D', fontSize: 12 }}
+                  tick={AXIS_TICK}
                   domain={['auto', 'auto']}
                 />
-                <Tooltip
-                  contentStyle={{ border: '1px solid #E7DADF', borderRadius: 12, color: '#494047' }}
-                />
+                <Tooltip {...TOOLTIP_PROPS} />
                 <Line
                   type="monotone"
                   dataKey={bodyLine}

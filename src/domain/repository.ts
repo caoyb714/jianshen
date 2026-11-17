@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { writeJson } from '../app/storage'
 import { dataSchema, type AppData, type Profile, type Workout } from './model'
 import { makeSeed, PROFILE_A, PROFILE_B } from './seed'
 
@@ -128,6 +129,10 @@ function hash(value: string): number {
   return result
 }
 
+/**
+ * 读取不走 storage.ts 的 readJson：这里必须区分"没有数据"（给种子）和
+ * "数据损坏"（保留原值并提示用户先导出），readJson 把两者都收敛成 null 会丢掉这个差别。
+ */
 export function loadData(storage: StoragePort): { data: AppData; error: string | null } {
   try {
     const raw = storage.getItem(STORAGE_KEY)
@@ -155,5 +160,8 @@ export function loadData(storage: StoragePort): { data: AppData; error: string |
 }
 
 export function saveData(storage: StoragePort, data: AppData): void {
-  storage.setItem(STORAGE_KEY, JSON.stringify(dataSchema.parse(data)))
+  const value = dataSchema.parse(data)
+  // 写入失败必须抛错：记录不能"看起来存上了"却丢在本机之外，
+  // 上层据此保留表单并明确提示，而不是静默吞掉
+  if (!writeJson(STORAGE_KEY, value, storage)) throw new Error('本机存储写入失败')
 }

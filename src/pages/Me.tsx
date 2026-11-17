@@ -12,8 +12,10 @@ import {
   LogOut,
 } from 'lucide-react'
 import { useProfile } from '../app/Store'
+import { readJson, removeKey, writeJson } from '../app/storage'
 import { PageHeading, Modal } from '../components/UI'
 import ProfileForm from '../components/ProfileForm'
+import { AI_CONSENT_KEY } from '../domain/ai'
 import { makeSeed } from '../domain/seed'
 import { STORAGE_KEY } from '../domain/repository'
 function downloadText(value: string, name: string) {
@@ -41,7 +43,16 @@ export default function Me() {
     } = useProfile(),
     [editing, setEditing] = useState(false),
     [confirm, setConfirm] = useState<'clear' | 'reset' | null>(null),
-    [install, setInstall] = useState(false)
+    [install, setInstall] = useState(false),
+    // 同意状态以本机标记为准，训练页每次点击都会重新读取它
+    [consent, setConsent] = useState(() => readJson<boolean>(AI_CONSENT_KEY) === true)
+
+  function toggleConsent(next: boolean) {
+    // 关闭时直接删键：任何读到"没有标记"的页面都会回到未同意状态，包括训练页的同意弹窗
+    const saved = next ? writeJson(AI_CONSENT_KEY, true) : removeKey(AI_CONSENT_KEY)
+    setConsent(saved && next)
+    if (!saved) notify('无法保存这项偏好，请检查浏览器是否允许本机存储。')
+  }
 
   function exportData() {
     try {
@@ -183,6 +194,22 @@ export default function Me() {
             onClick={() =>
               void commit({ kind: 'settings', value: { showWeight: !data.settings.showWeight } })
             }
+          >
+            <span />
+          </button>
+        </div>
+        <div className="setting-row">
+          <div>
+            <strong>AI 训练说明</strong>
+            <p>开启后可在训练页把档案摘要发给 DeepSeek 生成说明；关闭后不再发送。</p>
+          </div>
+          <button
+            className="switch"
+            type="button"
+            role="switch"
+            aria-label="AI 训练说明"
+            aria-checked={consent}
+            onClick={() => toggleConsent(!consent)}
           >
             <span />
           </button>

@@ -12,12 +12,13 @@ import {
   X,
 } from 'lucide-react'
 import { useProfile } from '../app/Store'
+import { readJson, removeKey, writeJson } from '../app/storage'
 import { Field, Modal } from '../components/UI'
-import { getExercise, isAvailable, exercises, type Exercise } from '../domain/exercises'
+import { getExercise, isAvailable, loadHint, exercises } from '../domain/exercises'
 import { suggest } from '../domain/engine'
 import { historyFor } from '../domain/stats'
 import { workoutSchema, type Performance, type SetRecord } from '../domain/model'
-import { displayDate } from '../domain/dates'
+import { displayDate, weekdayIndex } from '../domain/dates'
 
 type Draft = Performance
 
@@ -37,36 +38,17 @@ type StoredDraft = {
 }
 
 function readStoredDraft(): StoredDraft | null {
-  try {
-    const raw = localStorage.getItem(DRAFT_KEY)
-    if (!raw) return null
-    const value = JSON.parse(raw) as StoredDraft
-    if (!value || !Array.isArray(value.exercises) || value.exercises.length === 0) return null
-    const usable = value.exercises.every(
-      (row) => row && typeof row.exerciseId === 'string' && Array.isArray(row.sets),
-    )
-    return usable ? value : null
-  } catch {
-    return null
-  }
+  const value = readJson<StoredDraft>(DRAFT_KEY)
+  if (!value || !Array.isArray(value.exercises) || value.exercises.length === 0) return null
+  const usable = value.exercises.every(
+    (row) => row && typeof row.exerciseId === 'string' && Array.isArray(row.sets),
+  )
+  return usable ? value : null
 }
 
 function clearStoredDraft() {
-  try {
-    localStorage.removeItem(DRAFT_KEY)
-  } catch {
-    /* 存储不可用时静默跳过，不影响本次训练 */
-  }
-}
-
-function weekdayIndex(date: string): number {
-  return (new Date(`${date}T12:00:00`).getDay() + 6) % 7
-}
-
-function loadHint(exercise: Exercise): string {
-  if (exercise.equipment === '哑铃') return '重量 kg'
-  if (exercise.equipment === '弹力带') return '阻力档'
-  return '负重'
+  // 存储不可用时也静默跳过，不影响本次训练
+  removeKey(DRAFT_KEY)
 }
 
 export default function Workout() {
@@ -131,12 +113,21 @@ export default function Workout() {
       discomfort,
       exercises: draft,
     }
-    try {
-      localStorage.setItem(DRAFT_KEY, JSON.stringify(value))
-    } catch {
-      /* 隐私模式或存储已满时忽略，界面不受影响 */
-    }
-  }, [started, plan, day, active.id, date, logId, startedAt, difficulty, feeling, discomfort, draft])
+    // 隐私模式或存储已满时写入失败，界面照常工作
+    writeJson(DRAFT_KEY, value)
+  }, [
+    started,
+    plan,
+    day,
+    active.id,
+    date,
+    logId,
+    startedAt,
+    difficulty,
+    feeling,
+    discomfort,
+    draft,
+  ])
 
   const suggestions = useMemo(() => {
     const result: Record<string, ReturnType<typeof suggest>> = {}
@@ -154,6 +145,8 @@ export default function Workout() {
     return result
   }, [draft, active.workouts])
 
+  // 不复用 EmptyState：这里是整页占位，需要 <h1> 作为页面标题，
+  // 而 EmptyState 固定渲染 <h3> 并要求 description，改用它会让标题层级和留白都变化
   if (!plan || !day)
     return (
       <div className="empty-state">
@@ -393,7 +386,12 @@ export default function Workout() {
         <div className="notice-panel" role="status">
           <Clock3 size={18} />
           <p>
-            已恢复上次未保存的训练（开始于 {new Date(restored.startedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}）。
+            已恢复上次未保存的训练（开始于{' '}
+            {new Date(restored.startedAt).toLocaleTimeString('zh-CN', {
+              hour: '2-digit',
+              minute: '2-digit',
+            })}
+            ）。
           </p>
         </div>
       ) : null}

@@ -85,7 +85,8 @@ if (
 )
   process.exit(1)
 
-console.log(`\n完成。地址形如 https://${PROJECT}.pages.dev`)
+// 项目名与域名不一定相同：Cloudflare 会在 herfit 已被占用时分配 herfit-ec6.pages.dev
+console.log(`\n完成。当前线上地址 https://herfit-ec6.pages.dev（项目名 ${PROJECT}）`)
 console.log(
   '手机上打开该地址，用 herfit.a@ 或 herfit.b@ 登录；建议 Safari/Chrome 里「添加到主屏幕」。',
 )

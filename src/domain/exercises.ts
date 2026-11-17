@@ -1052,6 +1052,16 @@ export function isAvailable(exercise: Exercise, equipment: Equipment[]): boolean
   return exercise.equipment === '徒手' || equipment.includes(exercise.equipment)
 }
 
+/**
+ * 逐组记录里「负荷」一栏的文案：不同器械对应的物理量不同，
+ * 统一写「负重」会让弹力带和徒手动作难以理解，所以按器械给出口径。
+ */
+export function loadHint(exercise: Exercise): string {
+  if (exercise.equipment === '哑铃') return '重量 kg'
+  if (exercise.equipment === '弹力带') return '阻力档'
+  return '负重'
+}
+
 export const patternOrder: Pattern[] = ['蹲', '髋铰链', '推', '拉', '核心', '有氧', '灵活']
 
 export const patternLabels: Record<Pattern, string> = {
