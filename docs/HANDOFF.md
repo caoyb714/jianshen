@@ -1,5 +1,12 @@
 # 给下一位 AI 的交接说明
 
+## v0.5 新进展（阶段 5 已完成 · 已上线）
+
+- 线上地址 **https://herfit-ec6.pages.dev**（Cloudflare Pages，HTTPS，PWA 可安装）。
+- `scripts/deploy.mjs` + `npm run deploy`：构建 → 校验云端模式 → 确认登录 → 建/复用 Pages 项目 → 上传 dist。
+- CSP、`X-Frame-Options: DENY`、manifest、service worker 均已在线上核对生效；`connect-src` 只放行本项目 Supabase。
+- 直连（不开代理）实测：pages.dev 200 / 2.4s，Supabase 接口可达 / 4.7s。慢但可用。
+
 ## v0.4 新进展（阶段 4 已完成）
 
 阶段 4 补齐了统计与计划闭环：

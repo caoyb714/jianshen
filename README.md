@@ -6,6 +6,16 @@
 
 动作文案由本项目自行撰写，**未经专业审核**，不构成训练处方。
 
+## 线上地址
+
+**https://herfit-ec6.pages.dev** —— Cloudflare Pages，HTTPS，可添加到手机主屏幕。
+
+手机上打开后：iPhone 用 Safari「分享 → 添加到主屏幕」；Android 用 Chrome「菜单 → 安装应用」。账号见 `.env.setup.local` 同目录下的 `账号密码.local`。
+
+重新部署：`npm run deploy`（需要先 `npx wrangler login`，并确保 `.env.local` 是云端模式）。
+
+> Pages 项目名 `herfit` 已被占用，Cloudflare 自动分配为 `herfit-ec6`。想换域名可在控制台重命名或绑定自有域名。
+
 ## 快速运行
 
 要求 Node.js >=22.12（建议近期 LTS）、npm。项目已附 package-lock.json。
