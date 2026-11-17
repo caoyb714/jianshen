@@ -451,3 +451,71 @@ export function coverageGaps(day: PlanDay): Pattern[] {
   const required: Pattern[] = ['蹲', '髋铰链', '推', '拉', '核心']
   return required.filter((pattern) => !covered.has(pattern))
 }
+
+// ── 计划调整 ────────────────────────────────────────────────────────────
+
+export type Adjustment = {
+  exerciseId: string
+  name: string
+  suggestion: Suggestion
+}
+
+/**
+ * 把建议落到当天的组次上。纯函数：同一份输入永远得到同一份计划。
+ * - increase：提升起始负荷；徒手动作改为加次数
+ * - reduce：降低起始负荷
+ * - stop：换成建议的替代动作；计划槽位不带历史字段，替换痕迹只保留在动作库的替代关系里
+ */
+export function applyAdjustments(days: PlanDay[], adjustments: Adjustment[]): PlanDay[] {
+  const byExercise = new Map(adjustments.map((item) => [item.exerciseId, item]))
+  return days.map((day) => ({
+    ...day,
+    slots: day.slots.map((slot) => {
+      const adjustment = byExercise.get(slot.exerciseId)
+      if (!adjustment) return slot
+      const { suggestion } = adjustment
+
+      if (suggestion.kind === 'stop') {
+        const alternative = suggestion.alternative ? getExercise(suggestion.alternative) : undefined
+        if (!alternative) return slot
+        return {
+          ...slot,
+          exerciseId: alternative.id,
+          sets: Math.max(1, Math.min(10, alternative.dose.type === 'hold' ? slot.sets : slot.sets)),
+          target:
+            alternative.dose.type === 'reps'
+              ? { type: 'reps' as const, min: alternative.dose.min, max: alternative.dose.max }
+              : alternative.dose.type === 'hold'
+                ? { type: 'hold' as const, seconds: alternative.dose.seconds }
+                : {
+                    type: 'time' as const,
+                    minMinutes: alternative.dose.minMinutes,
+                    maxMinutes: alternative.dose.maxMinutes,
+                  },
+          restSeconds: alternative.restSeconds,
+          startLoad: 0,
+        }
+      }
+
+      if (suggestion.kind === 'increase') {
+        if (suggestion.nextReps !== null && slot.target.type === 'reps') {
+          const delta = suggestion.nextReps - slot.target.max
+          if (delta > 0)
+            return {
+              ...slot,
+              target: {
+                ...slot.target,
+                min: slot.target.min + delta,
+                max: slot.target.max + delta,
+              },
+            }
+          return slot
+        }
+        return { ...slot, startLoad: suggestion.nextLoad }
+      }
+
+      if (suggestion.kind === 'reduce') return { ...slot, startLoad: suggestion.nextLoad }
+      return slot
+    }),
+  }))
+}

@@ -5,7 +5,10 @@ async function ensurePlan(page: Page) {
   await page.goto('/me')
   await page.getByRole('button', { name: '编辑身体档案' }).click()
   await page.getByLabel('每周可安排天数').fill('7')
+  // 档案表单要求每次编辑都重新确认身体限制，否则保存会被拦下
+  await page.getByLabel('我已检查并确认上述身体限制').check()
   await page.getByRole('button', { name: '保存本机档案' }).click()
+  await expect(page.getByRole('dialog')).toHaveCount(0)
   await page.goto('/training')
   await page.getByRole('button', { name: '生成我的计划' }).click()
   await page.getByRole('button', { name: '确认使用此计划' }).click()

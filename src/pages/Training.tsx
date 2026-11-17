@@ -13,7 +13,13 @@ import {
 } from 'lucide-react'
 import { useProfile } from '../app/Store'
 import { PageHeading, EmptyState } from '../components/UI'
-import { generatePlan, type EngineResult } from '../domain/engine'
+import {
+  applyAdjustments,
+  generatePlan,
+  type EngineResult,
+  type Suggestion,
+} from '../domain/engine'
+import { reviewPlan } from '../domain/stats'
 import { getExercise, LIBRARY_REVIEWED } from '../domain/exercises'
 import type { PlanDay, TrainingPlan } from '../domain/model'
 
@@ -41,6 +47,31 @@ export default function Training() {
     if (!draft) return null
     return draft.days[todayIndex]
   }, [draft, todayIndex])
+
+  // 只列出会真正改变计划的建议；「保持」「数据不足」不打断用户
+  const review = useMemo(() => {
+    if (!active.plan) return []
+    return reviewPlan(active.plan.days, active.workouts).filter((item) =>
+      ['increase', 'reduce', 'stop'].includes(item.suggestion.kind),
+    )
+  }, [active.plan, active.workouts])
+
+  function applyReview() {
+    if (!plan) return
+    const days = applyAdjustments(
+      plan.days,
+      review.map(({ exerciseId, name, suggestion }) => ({ exerciseId, name, suggestion })),
+    )
+    setDraft({
+      ok: true,
+      days,
+      notes: [
+        '已按最近记录调整：' +
+          review.map((item) => `${item.name}（${adjustLabel(item.suggestion)}）`).join('、'),
+        '确认后才会替换当前计划，旧版本归档保留。',
+      ],
+    })
+  }
 
   function generate() {
     const result = generatePlan({
@@ -148,6 +179,32 @@ export default function Training() {
         </div>
       )}
 
+      {plan && !draft && review.length > 0 ? (
+        <section className="panel">
+          <div className="section-heading">
+            <h2>负荷调整建议</h2>
+            <span className="status-chip">待确认</span>
+          </div>
+          <p className="small-muted">
+            依据最近两次训练记录给出。确认后会生成新版本计划，旧版本归档保留。
+          </p>
+          <ul className="slot-list">
+            {review.map((item) => (
+              <li key={item.exerciseId} className="slot-row">
+                <span className="exercise-number">{adjustLabel(item.suggestion).slice(0, 1)}</span>
+                <div>
+                  <h3>{item.name}</h3>
+                  <p>{item.suggestion.reason}</p>
+                </div>
+              </li>
+            ))}
+          </ul>
+          <button className="button primary" onClick={applyReview}>
+            按建议生成新计划
+          </button>
+        </section>
+      ) : null}
+
       {plan && !draft ? (
         <section className="panel">
           <div className="section-heading">
@@ -189,6 +246,21 @@ export default function Training() {
       ) : null}
     </>
   )
+}
+
+function adjustLabel(suggestion: Suggestion): string {
+  switch (suggestion.kind) {
+    case 'increase':
+      return suggestion.nextReps !== null
+        ? `加次数至 ${suggestion.nextReps}`
+        : `加至 ${suggestion.nextLoad}`
+    case 'reduce':
+      return `降至 ${suggestion.nextLoad}`
+    case 'stop':
+      return '换动作'
+    default:
+      return '保持'
+  }
 }
 
 function DayDetail({

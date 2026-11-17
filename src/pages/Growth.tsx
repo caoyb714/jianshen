@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import {
   ResponsiveContainer,
   AreaChart,
@@ -7,21 +7,48 @@ import {
   YAxis,
   Tooltip,
   CartesianGrid,
+  LineChart,
+  Line,
 } from 'recharts'
 import { Sprout, Clock3, Moon, Dumbbell } from 'lucide-react'
 import { useProfile } from '../app/Store'
 import { PageHeading, EmptyState, SectionHeading } from '../components/UI'
-import { summarize, weekProgress } from '../domain/stats'
+import { exerciseProgress, metricSeries, summarize, weekProgress } from '../domain/stats'
 import { displayDate } from '../domain/dates'
 export default function Growth() {
   const { active, profile, today, cloud, data } = useProfile(),
     [days, setDays] = useState(7),
-    [view, setView] = useState<'minutes' | 'sleep' | 'energy'>('minutes'),
+    [view, setView] = useState<'minutes' | 'sleep' | 'water' | 'energy'>('minutes'),
+    [bodyKey, setBodyKey] = useState<'weight' | 'waist' | 'hip'>('waist'),
+    [focus, setFocus] = useState<string | null>(null),
     summary = summarize(active, days, new Date(`${today}T12:00:00`)),
     week = weekProgress(active, new Date(`${today}T12:00:00`)),
-    target = active.plan?.days.filter((day) => day.kind === '训练').length ?? profile.weeklyDays
-  const labels = { minutes: '运动分钟', sleep: '睡眠小时', energy: '精力评分' },
-    colors = { minutes: '#A45C75', sleep: '#83749E', energy: '#6B876D' }
+    target = active.plan?.days.filter((day) => day.kind === '训练').length ?? profile.weeklyDays,
+    metricRows = useMemo(() => metricSeries(active.metrics), [active.metrics]),
+    progress = useMemo(() => {
+      const names = new Map<string, string>()
+      for (const workout of active.workouts)
+        for (const item of workout.exercises) names.set(item.exerciseId, item.name)
+      return [...names.entries()]
+        .map(([id, name]) => {
+          const series = exerciseProgress(active.workouts, id)
+          const delta = series.length >= 2 ? series.at(-1)!.topLoad - series[0].topLoad : 0
+          return { id, name, series, delta }
+        })
+        .filter((item) => item.series.length >= 2)
+        .sort(
+          (a, b) =>
+            b.series.reduce((sum, point) => sum + point.volume, 0) -
+            a.series.reduce((sum, point) => sum + point.volume, 0),
+        )
+    }, [active.workouts]),
+    currentExercise = progress.find((item) => item.id === focus) ?? progress[0] ?? null,
+    // 徒手动作负荷恒为 0，此时改画完成次数
+    exerciseUsesLoad = Boolean(currentExercise?.series.some((point) => point.topLoad > 0)),
+    // 关闭体重显示后，即使之前选过体重也不画出来
+    bodyLine = data.settings.showWeight || bodyKey !== 'weight' ? bodyKey : 'waist'
+  const labels = { minutes: '运动分钟', sleep: '睡眠小时', water: '饮水毫升', energy: '精力评分' },
+    colors = { minutes: '#A45C75', sleep: '#83749E', water: '#6B876D', energy: '#A98452' }
   return (
     <>
       <PageHeading
@@ -94,7 +121,7 @@ export default function Growth() {
         <div className="section-heading">
           <h2>属于你的节奏</h2>
           <div className="segmented">
-            {(['minutes', 'sleep', 'energy'] as const).map((key) => (
+            {(['minutes', 'sleep', 'water', 'energy'] as const).map((key) => (
               <button key={key} aria-pressed={view === key} onClick={() => setView(key)}>
                 {labels[key]}
               </button>
@@ -131,7 +158,15 @@ export default function Growth() {
                 type="monotone"
                 dataKey={view}
                 stroke={colors[view]}
-                fill={view === 'minutes' ? '#F4E1E7' : view === 'sleep' ? '#ECE7F4' : '#E2EDE3'}
+                fill={
+                  view === 'minutes'
+                    ? '#F4E1E7'
+                    : view === 'sleep'
+                      ? '#ECE7F4'
+                      : view === 'water'
+                        ? '#E7F0E4'
+                        : '#F6EEDF'
+                }
                 strokeWidth={2.5}
                 connectNulls={false}
                 isAnimationActive={false}
@@ -173,6 +208,141 @@ export default function Growth() {
           <strong>愿意开始，也愿意休息，就是在好好照顾自己。</strong>
         </p>
       </div>
+      <SectionHeading title="动作进步" />
+      {progress.length ? (
+        <section className="panel chart-panel">
+          <div className="segmented wrap">
+            {progress.map((item) => (
+              <button
+                key={item.id}
+                aria-pressed={currentExercise?.id === item.id}
+                onClick={() => setFocus(item.id)}
+              >
+                {item.name}
+              </button>
+            ))}
+          </div>
+          {currentExercise ? (
+            <>
+              <div className="section-heading">
+                <h2>{currentExercise.name}</h2>
+                <span className="soft-label">
+                  {exerciseUsesLoad
+                    ? `最大负荷 ${currentExercise.series.at(-1)?.topLoad ?? 0}${
+                        currentExercise.delta !== 0
+                          ? `（${currentExercise.delta > 0 ? '+' : ''}${currentExercise.delta}）`
+                          : ''
+                      }`
+                    : `最近 ${currentExercise.series.at(-1)?.reps ?? 0} 次`}
+                  {` · 容量 ${currentExercise.series.at(-1)?.volume ?? 0}`}
+                </span>
+              </div>
+              <div className="chart" role="img" aria-label={`${currentExercise.name} 的负荷变化`}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart
+                    data={currentExercise.series}
+                    margin={{ top: 12, right: 15, left: -20, bottom: 0 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 5" vertical={false} stroke="#EDE5E7" />
+                    <XAxis
+                      dataKey="label"
+                      tickLine={false}
+                      axisLine={false}
+                      tick={{ fill: '#73636D', fontSize: 12 }}
+                    />
+                    <YAxis
+                      tickLine={false}
+                      axisLine={false}
+                      tick={{ fill: '#73636D', fontSize: 12 }}
+                      domain={[0, 'auto']}
+                    />
+                    <Tooltip
+                      contentStyle={{
+                        border: '1px solid #E7DADF',
+                        borderRadius: 12,
+                        color: '#494047',
+                      }}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey={exerciseUsesLoad ? 'topLoad' : 'reps'}
+                      name={exerciseUsesLoad ? '最大负荷' : '完成次数'}
+                      stroke="#A45C75"
+                      strokeWidth={2.5}
+                      isAnimationActive={false}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+              <p className="small-muted">
+                {exerciseUsesLoad
+                  ? '曲线是该动作每次训练的最大负荷；容量 = 次数 × 负荷，显示在标题里。'
+                  : '这个动作不使用负重，因此显示每次完成的次数。'}
+                同一动作记录两次以上才会出现曲线。
+              </p>
+            </>
+          ) : null}
+        </section>
+      ) : (
+        <EmptyState
+          title="还没有足够的动作记录"
+          description="同一动作完成两次以上，这里会出现负荷与容量的变化曲线。"
+        />
+      )}
+
+      <SectionHeading title="身体变化" />
+      {metricRows.length ? (
+        <section className="panel chart-panel">
+          <div className="segmented">
+            {(data.settings.showWeight
+              ? (['weight', 'waist', 'hip'] as const)
+              : (['waist', 'hip'] as const)
+            ).map((key) => (
+              <button key={key} aria-pressed={bodyKey === key} onClick={() => setBodyKey(key)}>
+                {{ weight: '体重', waist: '腰围', hip: '臀围' }[key]}
+              </button>
+            ))}
+          </div>
+          <div className="chart" role="img" aria-label="身体指标变化">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={metricRows} margin={{ top: 12, right: 15, left: -20, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 5" vertical={false} stroke="#EDE5E7" />
+                <XAxis
+                  dataKey="label"
+                  tickLine={false}
+                  axisLine={false}
+                  tick={{ fill: '#73636D', fontSize: 12 }}
+                />
+                <YAxis
+                  tickLine={false}
+                  axisLine={false}
+                  tick={{ fill: '#73636D', fontSize: 12 }}
+                  domain={['auto', 'auto']}
+                />
+                <Tooltip
+                  contentStyle={{ border: '1px solid #E7DADF', borderRadius: 12, color: '#494047' }}
+                />
+                <Line
+                  type="monotone"
+                  dataKey={bodyLine}
+                  name={{ weight: '体重 kg', waist: '腰围 cm', hip: '臀围 cm' }[bodyLine]}
+                  stroke="#A45C75"
+                  strokeWidth={2.5}
+                  connectNulls
+                  isAnimationActive={false}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+          <p className="small-muted">体重是可选记录项。变化看趋势，不设目标、不判断好坏。</p>
+        </section>
+      ) : (
+        <EmptyState
+          title="还没有身体指标"
+          description="在「记录」里填写腰围或体重后，这里会出现趋势。"
+        />
+      )}
+
       <SectionHeading title="身体记录" />
       {active.metrics.length ? (
         <div className="data-table panel">

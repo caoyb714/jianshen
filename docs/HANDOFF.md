@@ -1,5 +1,16 @@
 # 给下一位 AI 的交接说明
 
+## v0.4 新进展（阶段 4 已完成）
+
+阶段 4 补齐了统计与计划闭环：
+
+- `docs/STAGE4.md`：本轮范围、规则与边界。
+- `src/domain/engine.ts` 新增 `applyAdjustments`：把建议落到组次上（加量 / 降载 / 换动作），纯函数，6 项单测。
+- `src/domain/stats.ts` 新增 `reviewPlan`、`metricSeries`、`exerciseProgress`。
+- 训练页新增「负荷调整建议 → 按建议生成新计划 → 预览 → 确认」，复用原有的预览确认机制。
+- 成长页新增「动作进步」（单指标曲线，徒手动作画次数）与「身体变化」折线图；趋势图增加饮水。
+- 真实 Supabase 项目已接通并验收，见 `docs/GO-LIVE.md`。
+
 ## v0.3 新进展（阶段 3 已完成）
 
 阶段 3 已实现动作库、确定性规则引擎、计划生成与逐组打卡。细节见 [STAGE3.md](STAGE3.md)。

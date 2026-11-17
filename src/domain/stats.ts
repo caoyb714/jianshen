@@ -1,5 +1,6 @@
-import type { Habit, Metric, Workout } from './model'
-import type { ExerciseSession } from './engine'
+import type { Habit, Metric, PlanDay, Workout } from './model'
+import { suggest, type Adjustment, type ExerciseSession } from './engine'
+import { getExercise } from './exercises'
 import { localDate, shiftDate, weekDates } from './dates'
 
 export type Scoped = { workouts: Workout[]; habits: Habit[]; metrics: Metric[] }
@@ -95,4 +96,74 @@ export function weekProgress(scoped: Scoped, now = new Date()) {
         .reduce((sum, row) => sum + row.minutes, 0),
     })),
   }
+}
+
+/** 汇总当前计划里每个主要动作的负荷建议，供训练页确认后生效 */
+export function reviewPlan(days: PlanDay[], workouts: Workout[]): AugmentedAdjustment[] {
+  const seen = new Map<
+    string,
+    { exerciseId: string; name: string; targetRepsMax: number; startLoad: number }
+  >()
+  for (const day of days) {
+    for (const slot of day.slots) {
+      if (slot.role !== '主要' || seen.has(slot.exerciseId)) continue
+      const exercise = getExercise(slot.exerciseId)
+      if (!exercise) continue
+      seen.set(slot.exerciseId, {
+        exerciseId: slot.exerciseId,
+        name: exercise.name,
+        targetRepsMax: slot.target.type === 'reps' ? slot.target.max : 10,
+        startLoad: slot.startLoad,
+      })
+    }
+  }
+  const result: AugmentedAdjustment[] = []
+  for (const item of seen.values()) {
+    const exercise = getExercise(item.exerciseId)!
+    const suggestion = suggest({
+      exerciseId: item.exerciseId,
+      targetRepsMax: item.targetRepsMax,
+      equipment: exercise.equipment,
+      currentLoad: item.startLoad,
+      history: historyFor(workouts, item.exerciseId),
+    })
+    result.push({ ...item, suggestion })
+  }
+  return result
+}
+
+export type AugmentedAdjustment = Adjustment & { targetRepsMax: number; startLoad: number }
+
+/** 身体指标按日期升序，用于折线图 */
+export function metricSeries(metrics: Metric[]) {
+  return [...metrics]
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map((row) => ({
+      date: row.date,
+      label: `${Number(row.date.slice(5, 7))}/${Number(row.date.slice(8))}`,
+      weight: row.weight,
+      waist: row.waist,
+      hip: row.hip,
+    }))
+}
+
+/** 单个动作的进步曲线：每次训练的最大负荷与总容量 */
+export function exerciseProgress(workouts: Workout[], exerciseId: string) {
+  return [...workouts]
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .flatMap((workout) => {
+      const item = workout.exercises.find((row) => row.exerciseId === exerciseId)
+      if (!item) return []
+      const done = item.sets.filter((set) => set.done && set.reps > 0)
+      if (done.length === 0) return []
+      return [
+        {
+          date: workout.date,
+          label: `${Number(workout.date.slice(5, 7))}/${Number(workout.date.slice(8))}`,
+          topLoad: Math.max(...done.map((set) => set.load)),
+          volume: done.reduce((sum, set) => sum + set.reps * Math.max(1, set.load), 0),
+          reps: done.reduce((sum, set) => sum + set.reps, 0),
+        },
+      ]
+    })
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  applyAdjustments,
   coverageGaps,
   generatePlan,
   isDeloadWeek,
@@ -8,6 +9,7 @@ import {
   targetFor,
   type EngineInput,
   type ExerciseSession,
+  type PlanDay,
 } from '../src/domain/engine'
 import { exercises, getExercise, isAvailable } from '../src/domain/exercises'
 
@@ -269,5 +271,106 @@ describe('渐进负荷建议', () => {
     expect(isDeloadWeek(4)).toBe(true)
     expect(isDeloadWeek(8)).toBe(true)
     expect(isDeloadWeek(3)).toBe(false)
+  })
+})
+
+describe('计划调整', () => {
+  const days: PlanDay[] = [
+    {
+      index: 0,
+      kind: '训练',
+      focus: '全身力量',
+      warmup: '',
+      estimatedMinutes: 20,
+      note: '',
+      slots: [
+        {
+          exerciseId: 'db-curl',
+          role: '主要',
+          sets: 2,
+          target: { type: 'reps', min: 10, max: 12 },
+          restSeconds: 45,
+          startLoad: 6,
+        },
+      ],
+    },
+    {
+      index: 1,
+      kind: '休息',
+      focus: '休息',
+      warmup: '',
+      estimatedMinutes: 0,
+      note: '',
+      slots: [],
+    },
+  ]
+
+  it('加量建议只改起始负荷', () => {
+    const next = applyAdjustments(days, [
+      {
+        exerciseId: 'db-curl',
+        name: '哑铃弯举',
+        suggestion: { kind: 'increase', reason: '', nextLoad: 7, nextReps: null },
+      },
+    ])
+    expect(next[0].slots[0].startLoad).toBe(7)
+    expect(next[0].slots[0].target).toEqual({ type: 'reps', min: 10, max: 12 })
+  })
+
+  it('徒手动作改为提高目标次数', () => {
+    const next = applyAdjustments(days, [
+      {
+        exerciseId: 'db-curl',
+        name: '哑铃弯举',
+        suggestion: { kind: 'increase', reason: '', nextLoad: 0, nextReps: 14 },
+      },
+    ])
+    expect(next[0].slots[0].target).toEqual({ type: 'reps', min: 12, max: 14 })
+  })
+
+  it('降载建议下调起始负荷', () => {
+    const next = applyAdjustments(days, [
+      {
+        exerciseId: 'db-curl',
+        name: '哑铃弯举',
+        suggestion: { kind: 'reduce', reason: '', nextLoad: 5.5 },
+      },
+    ])
+    expect(next[0].slots[0].startLoad).toBe(5.5)
+  })
+
+  it('停止建议换成替代动作并重置负荷', () => {
+    const next = applyAdjustments(days, [
+      {
+        exerciseId: 'db-curl',
+        name: '哑铃弯举',
+        suggestion: { kind: 'stop', reason: '', alternative: 'band-curl' },
+      },
+    ])
+    expect(next[0].slots[0].exerciseId).toBe('band-curl')
+    expect(next[0].slots[0].startLoad).toBe(0)
+    expect(next[0].slots[0].target.type).toBe('reps')
+  })
+
+  it('没有替代动作时保持原样', () => {
+    const next = applyAdjustments(days, [
+      {
+        exerciseId: 'db-curl',
+        name: '哑铃弯举',
+        suggestion: { kind: 'stop', reason: '', alternative: null },
+      },
+    ])
+    expect(next[0].slots[0].exerciseId).toBe('db-curl')
+  })
+
+  it('未涉及的动作与休息日不受影响', () => {
+    const next = applyAdjustments(days, [
+      {
+        exerciseId: 'other',
+        name: 'x',
+        suggestion: { kind: 'increase', reason: '', nextLoad: 99, nextReps: null },
+      },
+    ])
+    expect(next).toEqual(days)
   })
 })
