@@ -117,6 +117,19 @@ export function createRepository(client: SupabaseClient) {
             .abortSignal(signal)
           return unpack(data, error, status)
         }
+        if (change.kind === 'plan') {
+          // 计划写入单独走带乐观锁的函数：两台设备同时提交时，后到的会拿到冲突而不是覆盖
+          const active = current.plans.find((row) => row.value.status === 'active')
+          const { data, error, status } = await client
+            .rpc('herfit_write_plan', {
+              p_workspace: current.workspaceId,
+              p_profile: change.value.profileId,
+              p_payload: change.value,
+              p_expected: active?.value.version ?? null,
+            })
+            .abortSignal(signal)
+          return unpack(data, error, status)
+        }
         const expected = revisionFor(current, change, formRevision)
         const { data, error, status } = await client
           .rpc('herfit_write', {

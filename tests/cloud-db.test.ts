@@ -95,6 +95,18 @@ function write(
     .then((result) => result.rows[0].snapshot)
 }
 
+/** 计划专用的写入函数：带乐观锁，语义是「我看到的是第几版」 */
+function writePlan(data: unknown, expected: number | null) {
+  return db
+    .query<{ snapshot: Snapshot }>('select public.herfit_write_plan($1,$2,$3,$4) as snapshot', [
+      space,
+      profile,
+      JSON.stringify(data),
+      expected,
+    ])
+    .then((result) => result.rows[0].snapshot)
+}
+
 function planPayload(id: string, status: 'active' | 'archived' = 'active'): TrainingPlan {
   const result = generatePlan({
     age: 26,
@@ -283,6 +295,29 @@ it('keeps exactly one active plan per profile', async () => {
   expect(active).toHaveLength(1)
   expect(active[0].value.id).toBe(second.id)
   expect(snapshot.plans.some((row) => row.value.status === 'archived')).toBe(true)
+})
+
+it('rejects a plan write made against a stale version', async () => {
+  const base = await asUser(a, read)
+  const active = base.plans.find((row) => row.value.status === 'active')!
+  const version = (active.value as { version: number }).version
+
+  // 版本号对得上：允许写入，旧版归档
+  const next = {
+    ...planPayload('40000000-0000-0000-0000-000000000004'),
+    version: version + 1,
+  }
+  const after = await asUser(a, () => writePlan(next, version))
+  expect(after.plans.find((row) => row.value.status === 'active')?.value.id).toBe(next.id)
+
+  // 同一台设备拿着旧版本号再提交：必须硬拒，而不是把新版本覆盖掉
+  const stale = {
+    ...planPayload('40000000-0000-0000-0000-000000000005'),
+    version: version + 2,
+  }
+  await expect(asUser(a, () => writePlan(stale, version))).rejects.toMatchObject({ code: '40001' })
+  const unchanged = await asUser(a, read)
+  expect(unchanged.plans.find((row) => row.value.status === 'active')?.value.id).toBe(next.id)
 })
 
 it('rejects a malformed plan payload', async () => {

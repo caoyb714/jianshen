@@ -79,10 +79,11 @@ async function emulateSupabase(contexts: BrowserContext[]) {
     const uid = tokens.get(token)
     if (!uid) return reply({ code: '42501', message: 'not signed in' }, 401)
     const write = path.endsWith('/herfit_write')
+    const planWrite = path.endsWith('/herfit_write_plan')
     const remove = path.endsWith('/herfit_delete_workout')
-    if (!write && !remove && !path.endsWith('/herfit_snapshot'))
+    if (!write && !planWrite && !remove && !path.endsWith('/herfit_snapshot'))
       return reply({ message: 'unexpected API route' }, 404)
-    if ((write || remove) && failNextWrite) {
+    if ((write || planWrite || remove) && failNextWrite) {
       failNextWrite = false
       return reply({ code: '22000', message: 'test write rejection' }, 400)
     }
@@ -91,7 +92,7 @@ async function emulateSupabase(contexts: BrowserContext[]) {
         `begin; set local role authenticated; set local "request.jwt.claim.sub" = '${uid}';`,
       )
       try {
-        const args = write || remove ? request.postDataJSON() : null
+        const args = write || planWrite || remove ? request.postDataJSON() : null
         const result = write
           ? await db.query<{ value: unknown }>(
               'select public.herfit_write($1,$2,$3,$4,$5) as value',
@@ -103,12 +104,17 @@ async function emulateSupabase(contexts: BrowserContext[]) {
                 args.p_expected,
               ],
             )
-          : remove
+          : planWrite
             ? await db.query<{ value: unknown }>(
-                'select public.herfit_delete_workout($1,$2,$3) as value',
-                [args.p_workspace, args.p_profile, args.p_record],
+                'select public.herfit_write_plan($1,$2,$3,$4) as value',
+                [args.p_workspace, args.p_profile, JSON.stringify(args.p_payload), args.p_expected],
               )
-            : await db.query<{ value: unknown }>('select public.herfit_snapshot() as value')
+            : remove
+              ? await db.query<{ value: unknown }>(
+                  'select public.herfit_delete_workout($1,$2,$3) as value',
+                  [args.p_workspace, args.p_profile, args.p_record],
+                )
+              : await db.query<{ value: unknown }>('select public.herfit_snapshot() as value')
         await db.exec('commit')
         await reply(result.rows[0].value)
       } catch (error) {
