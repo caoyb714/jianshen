@@ -253,6 +253,16 @@ async function handle(context: Context): Promise<Response> {
     return reply({ ok: false, reason: 'bad-request' })
   }
 
+  // 带 items 的请求走条目化依据；其余仍按整段说明处理，旧客户端不受影响。
+  // 注意：只要声明了 items 就必须按条目契约校验，不能退回整段说明——
+  // 否则一条畸形请求会被当成散文请求发给上游，白花一次额度。
+  const wantsBasis = typeof body === 'object' && body !== null && 'items' in body
+  if (wantsBasis) {
+    const basis = validateBasis(body)
+    if (!basis) return reply({ ok: false, reason: 'bad-request' })
+    return runBasis(basis, key)
+  }
+
   const input = validate(body)
   if (!input) return reply({ ok: false, reason: 'bad-request' })
 
@@ -315,3 +325,187 @@ export async function onRequest(context: Context): Promise<Response> {
 }
 
 export const onRequestPost = onRequest
+
+/**
+ * 条目化依据：与上面的整段说明共用防滥用与超时策略，但契约不同。
+ *
+ * 为什么要单独一条路径：整段说明没法标出"哪句话对应哪条建议"，用户读完仍不知道
+ * 该改哪个。条目化之后，模型只填「为什么」，幅度与顺序仍由本地规则决定。
+ */
+type BasisItem = {
+  sig: string
+  name: string
+  label: string
+  evidence: { reps: number | null; load: number | null; difficulty: number | null }
+}
+
+type BasisInput = {
+  planVersion: number
+  day: { focus: string; slots: Array<{ name: string; sets: number; target: string; role: string }> }
+  items: BasisItem[]
+}
+
+const BASIS_PROMPT = [
+  '你只解释本地规则已经算好的训练调整，不能修改任何数字，也不能新增动作。',
+  '每条理由 20–40 字，说清为什么这样调、下次注意什么。',
+  '必须引用该条给出的实测数字（次数、重量或难度），不得出现这些数字之外的任何数字。',
+  '不得给医疗建议、诊断、减重目标、热量或饮食处方。',
+  '提到疼痛、头晕或不适时，必须建议停止训练并及时就医。',
+  '只输出 JSON：{"items":[{"sig":"原样返回输入里的 sig","text":"..."}]}，不要 Markdown。',
+].join('\n')
+
+/** 只要请求里带 items 就走条目化路径；旧客户端仍按整段说明处理，互不影响。 */
+function validateBasis(value: unknown): BasisInput | null {
+  if (!value || typeof value !== 'object') return null
+  const root = value as Record<string, unknown>
+  const day = root.day
+  const rawItems = root.items
+  if (!day || typeof day !== 'object') return null
+  if (!Array.isArray(rawItems) || rawItems.length < 1 || rawItems.length > 6) return null
+
+  const d = day as Record<string, unknown>
+  if (typeof d.focus !== 'string') return null
+  if (!Array.isArray(d.slots) || d.slots.length < 1 || d.slots.length > 12) return null
+  const slots: BasisInput['day']['slots'] = []
+  for (const item of d.slots) {
+    if (!item || typeof item !== 'object') continue
+    const slot = item as Record<string, unknown>
+    slots.push({
+      name: clip(typeof slot.name === 'string' ? slot.name : '未命名动作', 30),
+      sets: integer(slot.sets, 1, 12) ?? 1,
+      target: clip(typeof slot.target === 'string' ? slot.target : '按计划完成', 24),
+      role: slot.role === '放松' ? '放松' : '主要',
+    })
+  }
+  if (slots.length === 0) return null
+
+  const items: BasisItem[] = []
+  for (const item of rawItems) {
+    if (!item || typeof item !== 'object') continue
+    const row = item as Record<string, unknown>
+    const sig = typeof row.sig === 'string' ? clip(row.sig, 64) : ''
+    if (!sig) continue
+    const raw = (row.evidence && typeof row.evidence === 'object' ? row.evidence : {}) as Record<
+      string,
+      unknown
+    >
+    items.push({
+      sig,
+      name: clip(typeof row.name === 'string' ? row.name : '未命名动作', 30),
+      label: clip(typeof row.label === 'string' ? row.label : '调整', 16),
+      evidence: {
+        reps: integer(raw.reps, 0, 100),
+        load: decimal(raw.load, 0, 400),
+        difficulty: decimal(raw.difficulty, 0, 10),
+      },
+    })
+  }
+  if (items.length === 0) return null
+  // 签名必须唯一，否则条目与理由会错配
+  if (new Set(items.map((item) => item.sig)).size !== items.length) return null
+
+  return {
+    planVersion: integer(root.planVersion, 0, 9999) ?? 0,
+    day: { focus: clip(d.focus, 40), slots },
+    items,
+  }
+}
+
+function buildBasisMessage(input: BasisInput): string {
+  const lines = [`今天是${input.day.focus}，计划共 ${input.day.slots.length} 个动作。`]
+  for (const item of input.items) {
+    const facts: string[] = []
+    if (item.evidence.reps !== null) facts.push(`上次 ${item.evidence.reps} 次`)
+    if (item.evidence.load !== null && item.evidence.load > 0)
+      facts.push(`${item.evidence.load} kg`)
+    if (item.evidence.difficulty !== null) facts.push(`难度 ${item.evidence.difficulty}/10`)
+    lines.push(
+      `sig=${item.sig} | ${item.name} | 调整=${item.label} | ${facts.length ? facts.join('，') : '暂无实测数据'}`,
+    )
+  }
+  return lines.join('\n')
+}
+
+/** 文本里出现的数字必须来自该条的实测数据或幅度文案，否则这条理由就是编的。 */
+function numbersMatch(text: string, item: BasisItem): boolean {
+  const found = text.match(/\d+(?:\.\d+)?/g)
+  if (!found) return true
+  // 幅度文案本身由本地规则生成（例如「+2.5 kg」），引用它不算编造
+  const fromLabel = item.label.match(/\d+(?:\.\d+)?/g) ?? []
+  const allowed = new Set(
+    [item.evidence.reps, item.evidence.load, item.evidence.difficulty]
+      .filter((value): value is number => typeof value === 'number')
+      .map((value) => String(Math.round(value * 10) / 10))
+      .concat(fromLabel.map((raw) => String(Math.round(Number(raw) * 10) / 10))),
+  )
+  return found.every((raw) => allowed.has(String(Math.round(Number(raw) * 10) / 10)))
+}
+
+function readBasis(content: string, items: BasisItem[]): Array<{ sig: string; text: string }> {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(content)
+  } catch {
+    // 模型没按 JSON 输出时整批丢弃：宁可没有理由，也不能把自由发挥塞进界面
+    return []
+  }
+  const list = (parsed as { items?: unknown })?.items
+  if (!Array.isArray(list)) return []
+  const byName = new Map(items.map((item) => [item.sig, item]))
+  const out: Array<{ sig: string; text: string }> = []
+  for (const entry of list) {
+    if (!entry || typeof entry !== 'object') continue
+    const row = entry as { sig?: unknown; text?: unknown }
+    if (typeof row.sig !== 'string' || typeof row.text !== 'string') continue
+    const item = byName.get(row.sig)
+    if (!item) continue
+    const text = clip(row.text, 40)
+    if (text.length < 8) continue
+    if (!numbersMatch(text, item)) continue
+    out.push({ sig: row.sig, text })
+  }
+  return out.slice(0, items.length)
+}
+
+async function runBasis(input: BasisInput, key: string): Promise<Response> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS)
+  let upstream: Response
+  try {
+    upstream = await fetch(UPSTREAM_URL, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'deepseek-chat',
+        temperature: 0.2,
+        max_tokens: 600,
+        stream: false,
+        messages: [
+          { role: 'system', content: BASIS_PROMPT },
+          { role: 'user', content: buildBasisMessage(input) },
+        ],
+      }),
+      signal: controller.signal,
+    })
+  } catch {
+    console.error(controller.signal.aborted ? 'deepseek timeout' : 'deepseek network error')
+    return reply({ ok: false, reason: controller.signal.aborted ? 'timeout' : 'upstream' })
+  } finally {
+    clearTimeout(timer)
+  }
+
+  if (!upstream.ok) {
+    console.error('deepseek status', upstream.status)
+    return reply({ ok: false, reason: 'upstream' })
+  }
+  let data: unknown
+  try {
+    data = await upstream.json()
+  } catch {
+    console.error('deepseek invalid json')
+    return reply({ ok: false, reason: 'upstream' })
+  }
+  const content = readContent(data) ?? ''
+  // 解析失败不是错误：界面拿到空数组就只显示本地幅度，功能不残缺
+  return reply({ ok: true, items: readBasis(content, input.items) })
+}
