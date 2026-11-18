@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { Link, useLocation } from 'react-router-dom'
 import {
   UserRound,
   Pencil,
@@ -18,6 +19,8 @@ import ProfileForm from '../components/ProfileForm'
 import { AI_CONSENT_KEY } from '../domain/ai'
 import { makeSeed } from '../domain/seed'
 import { STORAGE_KEY } from '../domain/repository'
+import { latestWeights } from '../domain/stats'
+import { displayDate } from '../domain/dates'
 function downloadText(value: string, name: string) {
   const url = URL.createObjectURL(new Blob([value], { type: 'application/json;charset=utf-8' }))
   const link = document.createElement('a')
@@ -46,6 +49,18 @@ export default function Me() {
     [install, setInstall] = useState(false),
     // 同意状态以本机标记为准，训练页每次点击都会重新读取它
     [consent, setConsent] = useState(() => readJson<boolean>(AI_CONSENT_KEY) === true)
+  const location = useLocation(),
+    latestWeight = latestWeights(active.metrics)[0]
+
+  // Me 是懒加载路由：浏览器原生 hash 滚动发生在 Suspense 占位阶段，那时元素还没挂载，
+  // 所以 /me#showWeight 不会自己滚到底。必须等这一帧渲染完再手动滚。
+  useEffect(() => {
+    if (location.hash !== '#showWeight') return
+    const timer = window.setTimeout(() => {
+      document.getElementById('showWeight')?.scrollIntoView({ block: 'center' })
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [location.hash])
 
   function toggleConsent(next: boolean) {
     // 关闭时直接删键：任何读到"没有标记"的页面都会回到未同意状态，包括训练页的同意弹窗
@@ -173,9 +188,26 @@ export default function Me() {
         </div>
       </section>
 
+      {data.settings.showWeight ? (
+        <section className="weight-mirror">
+          <div>
+            <span>体重</span>
+            <strong>{latestWeight ? `${latestWeight.weight} kg` : '尚未记录'}</strong>
+            <small>
+              {latestWeight
+                ? `最近一次 ${displayDate(latestWeight.date)}`
+                : '在「记录」页添加第一次记录'}
+            </small>
+          </div>
+          <Link className="text-button" to="/records">
+            记录体重
+          </Link>
+        </section>
+      ) : null}
+
       <section className="settings-section">
         <h2>按你的方式使用</h2>
-        <div className="setting-row">
+        <div className="setting-row" id="showWeight">
           <div>
             <strong>显示体重记录</strong>
             <p>

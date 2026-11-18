@@ -123,17 +123,44 @@ test('swaps an exercise mid-session without losing the plan', async ({ page }) =
   await expect(page.getByText('已替换').first()).toBeVisible()
 })
 
-test('settings hide weight and clear only the current profile records', async ({ page }) => {
+test('weight is visible by default and keeps the same row when updated', async ({ page }) => {
+  await page.goto('/records')
+  await expect(page.getByRole('heading', { name: '体重' })).toBeVisible()
+  await expect(page.locator('.weight-value strong')).toHaveText('54')
+
+  // 同天更新体重：写入同一行，且不把已有的腰围覆盖掉
+  await page.getByRole('button', { name: '更新今天的体重' }).click()
+  await page.getByLabel('今天的体重（kg）').fill('55.5')
+  await page.getByRole('button', { name: '保存', exact: true }).click()
+  await expect(page.locator('.weight-value strong')).toHaveText('55.5')
+  const saved = await page.evaluate(() => {
+    const raw = JSON.parse(localStorage.getItem('herfit.demo.v2') ?? '{}')
+    return (raw.metrics ?? [])
+      .filter((row: { weight: number | null }) => row.weight === 55.5)
+      .map((row: { waist: number | null }) => row.waist)
+  })
+  expect(saved).toEqual([68])
+
+  // 关闭开关：保留标题与壳，但壳内不得出现任何数字
   await page.goto('/me')
   await page.getByRole('switch', { name: '显示体重记录' }).click()
   await page.goto('/records')
-  await expect(page.getByLabel('体重（kg）')).toBeVisible()
+  await expect(page.getByRole('heading', { name: '体重' })).toBeVisible()
+  await expect(page.getByText('体重记录已隐藏')).toBeVisible()
+  await expect(page.locator('.weight-panel')).not.toContainText(/\d/)
+
+  // 重新打开：数据仍在
   await page.goto('/me')
   await page.getByRole('switch', { name: '显示体重记录' }).click()
+  await page.goto('/records')
+  await expect(page.locator('.weight-value strong')).toHaveText('55.5')
+
+  // 清空当前档案的记录后回到空态
+  await page.goto('/me')
   await page.getByRole('button', { name: '清空当前档案的记录' }).click()
   await page.getByRole('button', { name: '确认清空' }).click()
   await page.goto('/records')
-  await expect(page.getByLabel('体重（kg）')).toHaveCount(0)
+  await expect(page.getByText('还没有记录过体重。')).toBeVisible()
   await expect(page.getByText('还没有训练记录')).toBeVisible()
 })
 

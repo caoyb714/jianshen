@@ -104,7 +104,7 @@ export function makeSeed(now = new Date()): AppData {
   return {
     version: 2,
     profiles: makeSlots(first),
-    settings: { showWeight: false },
+    settings: { showWeight: true },
     habits: Array.from({ length: 28 }, (_, i) => ({
       profileId: PROFILE_A,
       date: localDate(shiftDate(now, -i)),

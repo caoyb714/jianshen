@@ -34,6 +34,19 @@ export function totalVolume(workout: Workout): number {
   )
 }
 
+/**
+ * 最近的有效体重记录（按日期倒序）。
+ *
+ * 体重只有一个数据源：每日指标。档案里不存体重，避免两个来源给出不同数字。
+ * 0 与 null 都不是「有效体重」：早期版本可能留下空值，混进来会把曲线拉平。
+ */
+export function latestWeights(metrics: Metric[], limit = 2): Metric[] {
+  return metrics
+    .filter((row) => typeof row.weight === 'number' && row.weight >= 20)
+    .sort((a, b) => b.date.localeCompare(a.date))
+    .slice(0, Math.max(0, limit))
+}
+
 /** 供渐进负荷判断使用的单动作历史，按日期倒序 */
 export function historyFor(workouts: Workout[], exerciseId: string, limit = 6): ExerciseSession[] {
   return workouts

@@ -122,19 +122,19 @@
 
 ## 4. 工程落地
 
-| 文件                       | 改什么                                                                                                                    | 是否新增 |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------- | -------- |
-| `src/domain/model.ts`      | **零改动**：不加 `profile.weight`、不加 settings 键                                                                       | 否       |
-| `src/domain/stats.ts`      | `latestWeight`（≥20 且非空）、`weightSeries`                                                                              | 否       |
-| `src/domain/ai.ts`         | 改为 `buildBasisPayload`：当天 1 天 + ≤6 条幅度，**无体重**                                                               | 否       |
-| `src/app/explain.ts`       | 条目数组响应、超时放宽到 18s、坏形状降级                                                                                  | 否       |
-| `functions/api/explain.ts` | 条目白名单 + 数字校验；4KB / 5 次 / 12s 不变                                                                              | 否       |
-| `src/app/aiBasis.ts`       | 每版每天 1 次、手动 ≤4、30s 倒计时                                                                                        | **是**   |
-| `src/pages/Records.tsx`    | 独立体重块 + 同天指标合并写                                                                                               | 否       |
-| `src/pages/Training.tsx`   | 合并面板、采纳草稿 state、stamp 比对                                                                                      | 否       |
-| `src/pages/Me.tsx`         | 只读体重展示；`.setting-row` 容器加 `id="showWeight"`（不是内层开关）；`useEffect` 处理 `#showWeight` 的 `scrollIntoView` | 否       |
-| `src/pages/Growth.tsx`     | 已有开关分支，仅补 tab/列一致性                                                                                           | 否       |
-| `src/styles.css`           | 复用 `.panel`/`.slot-row`，约 +120 行，含 token 化与 `#showWeight { scroll-margin-block: 16px }`                          | 否       |
+| 文件                       | 改什么                                                      | 是否新增 |
+| -------------------------- | ----------------------------------------------------------- | -------- |
+| `src/domain/model.ts`      | **零改动**：不加 `profile.weight`、不加 settings 键         | 否       |
+| `src/domain/stats.ts`      | `latestWeight`（≥20 且非空）、`weightSeries`                | 否       |
+| `src/domain/ai.ts`         | 改为 `buildBasisPayload`：当天 1 天 + ≤6 条幅度，**无体重** | 否       |
+| `src/app/explain.ts`       | 条目数组响应、超时放宽到 18s、坏形状降级                    | 否       |
+| `functions/api/explain.ts` | 条目白名单 + 数字校验；4KB / 5 次 / 12s 不变                | 否       |
+| `src/app/aiBasis.ts`       | 每版每天 1 次、手动 ≤4、30s 倒计时                          | **是**   |
+| `src/pages/Records.tsx`    | 独立体重块 + 同天指标合并写                                 | 否       |
+| `src/pages/Training.tsx`   | 合并面板、采纳草稿 state、stamp 比对                        | 否       |
+| `src/pages/Me.tsx`         | 只读体重展示                                                | 否       |
+| `src/pages/Growth.tsx`     | 已有开关分支，仅补 tab/列一致性                             | 否       |
+| `src/styles.css`           | 复用 `.panel`/`.slot-row`，约 +120 行，含 token 化          | 否       |
 
 **三个技术难点**
 
@@ -144,15 +144,14 @@
 
 **风险（按严重度）**
 
-| 级别 | 风险                                                                                                                                    | 规避                                                                                                              |
-| ---- | --------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| 高   | 记录页拆块后，同天 metric 是**整行覆盖**（`change.ts` 按 profileId+date 替换），填体重会把腰围清空                                      | 写前 `merge` 已有行，单次 `commit`                                                                                |
-| 高   | 云端 plan 无版本互斥（`p_expected` 为 null，先归档再插入），并发可旧版覆盖新版                                                          | 客户端 stamp 硬拒 + 冲突后刷新；根治需给 `herfit_write` 的 plan 分支加 `p_expected`                               |
-| 高   | 给 `dataSchema`/`profileSchema`/`settings` 加必填键 → `loadData` 落入 catch、云端快照同样解析失败                                       | 本次**不加**任何必填键；AI 计数与草稿用独立存储键                                                                 |
-| 中   | `latestWeight` 把 `0`/`null` 当有效值会拉平曲线                                                                                         | 类型 + 下限双守，单测覆盖                                                                                         |
-| 中   | 现有 E2E 断言会因面板合并失效（`tests/app.spec.ts:214/216` 的「生成今日说明」「暂时无法生成说明…」）                                    | 同步改断言；`cloud.spec.ts` 只复核新控件选择器唯一                                                                |
-| 中   | 800ms 延迟与 planStamp 竞争，迟到依据可能落进新版本卡片                                                                                 | `AbortController` + 返回后复检 stamp                                                                              |
-| 中   | `/me#showWeight` 锚点会**静默失效**：`App.tsx` 是纯 `BrowserRouter` + `Me` 懒加载，原生 hash 滚动发生在 Suspense 占位阶段，元素尚未挂载 | 容器加 `id` + `useEffect` 里 `scrollIntoView` + `scroll-margin-block`，三处必须同批合入；只查 `id` 是否存在会漏测 |
+| 级别 | 风险                                                                                                 | 规避                                                                                |
+| ---- | ---------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| 高   | 记录页拆块后，同天 metric 是**整行覆盖**（`change.ts` 按 profileId+date 替换），填体重会把腰围清空   | 写前 `merge` 已有行，单次 `commit`                                                  |
+| 高   | 云端 plan 无版本互斥（`p_expected` 为 null，先归档再插入），并发可旧版覆盖新版                       | 客户端 stamp 硬拒 + 冲突后刷新；根治需给 `herfit_write` 的 plan 分支加 `p_expected` |
+| 高   | 给 `dataSchema`/`profileSchema`/`settings` 加必填键 → `loadData` 落入 catch、云端快照同样解析失败    | 本次**不加**任何必填键；AI 计数与草稿用独立存储键                                   |
+| 中   | `latestWeight` 把 `0`/`null` 当有效值会拉平曲线                                                      | 类型 + 下限双守，单测覆盖                                                           |
+| 中   | 现有 E2E 断言会因面板合并失效（`tests/app.spec.ts:214/216` 的「生成今日说明」「暂时无法生成说明…」） | 同步改断言；`cloud.spec.ts` 只复核新控件选择器唯一                                  |
+| 中   | 800ms 延迟与 planStamp 竞争，迟到依据可能落进新版本卡片                                              | `AbortController` + 返回后复检 stamp                                                |
 
 ## 5. 排期（6.5 个半天）
 
@@ -171,7 +170,7 @@
 **E2E（在既有 12 条上追加）**：
 
 1. 档案表单与我的页任何位置都无体重输入
-2. 同天二次保存覆盖同一行 metric，不产生重复行，且为最新值（云端并发写同一天会抛 conflict，断言不要写成「总是成功」）
+2. 同天二次保存覆盖同一行 metric，不产生重复行
 3. 关开关后记录页输入、成长页 tab/列/曲线体重全消失，数据仍在，壳内无数字
 4. 采纳 3 条未生成版本：`plans` 长度与 `active.plan.version` 均不变
 5. 生成新版本后旧版 `archived`、版本 +1、条目转「已生效」
@@ -195,7 +194,6 @@
 23. S3 点「采纳」不产生版本、卡底计数 +1
 24. S3 条目不存在「再采纳」文案；pending 只出现在卡底与 S2 两处
 25. `--ink-3` 等新令牌在 C 段之前落入 `:root`；未定义时 `var()` 无回退值会让文案变默认黑
-26. 从记录页的关闭态点「在设置里打开」，落到「显示体重记录」那一行且该行可见（锚点必须真的滚动，不是只加了 `id`）
 
 ## 7. 需要产品确认的三个决定
 

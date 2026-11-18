@@ -15,7 +15,7 @@ import { PageHeading, Field, MoodPicker, EmptyState, SectionHeading } from '../c
 import { emptyHabit } from '../domain/seed'
 import { metricSchema } from '../domain/model'
 import { displayDate } from '../domain/dates'
-import { isComplete } from '../domain/stats'
+import { isComplete, latestWeights } from '../domain/stats'
 export default function Records() {
   const {
       active,
@@ -37,7 +37,14 @@ export default function Records() {
     [hip, setHip] = useState(''),
     [error, setError] = useState(''),
     [sleepError, setSleepError] = useState(''),
+    [weightError, setWeightError] = useState(''),
+    [editingWeight, setEditingWeight] = useState(false),
     [pendingDelete, setPendingDelete] = useState<string | null>(null)
+  // 体重只有一个数据源：每日指标。取最近两条有效记录算变化，0 与 null 不算有效。
+  const weighed = latestWeights(active.metrics),
+    latestWeight = weighed[0],
+    previousWeight = weighed[1],
+    todayWeight = active.metrics.find((row) => row.date === today && typeof row.weight === 'number')
   useEffect(() => {
     const current = active.habits.find((h) => h.date === today)
     setSleep(String(current?.sleep ?? ''))
@@ -57,32 +64,68 @@ export default function Records() {
   async function saveMetrics() {
     if (!ensureToday()) return
     const existing = active.metrics.find((m) => m.date === today)
+    if (!waist.trim() && !hip.trim()) {
+      setError('至少填写一项自愿记录的身体指标。')
+      return
+    }
     const result = metricSchema.safeParse({
       profileId: active.id,
       id: existing?.id ?? crypto.randomUUID(),
       date: today,
-      weight: data.settings.showWeight
-        ? weight.trim()
-          ? Number(weight)
-          : (existing?.weight ?? null)
-        : (existing?.weight ?? null),
+      // 体重改由独立体重块写入：这里整行覆盖时必须原样带回去，否则填腰围会把体重清空
+      weight: existing?.weight ?? null,
       waist: waist.trim() ? Number(waist) : (existing?.waist ?? null),
       hip: hip.trim() ? Number(hip) : (existing?.hip ?? null),
     })
-    if ((!weight.trim() || !data.settings.showWeight) && !waist.trim() && !hip.trim()) {
-      setError('至少填写一项自愿记录的身体指标。')
-      return
-    }
     if (!result.success) {
-      setError('请检查数值：体重 20–400 kg，腰围和臀围 30–250 cm。')
+      setError('请检查数值：腰围和臀围 30–250 cm。')
       return
     }
     if (await commit({ kind: 'metric', value: result.data })) {
       setError('')
-      setWeight('')
       setWaist('')
       setHip('')
     } else setError('身体记录未获保存确认，输入已保留。')
+  }
+  async function saveWeight() {
+    if (!ensureToday()) return
+    const existing = active.metrics.find((m) => m.date === today)
+    const value = Number(weight)
+    if (!weight.trim() || !Number.isFinite(value)) {
+      setWeightError('请填写体重，单位千克。')
+      return
+    }
+    const result = metricSchema.safeParse({
+      profileId: active.id,
+      id: existing?.id ?? crypto.randomUUID(),
+      date: today,
+      weight: value,
+      // 同天已有腰围/臀围时一并带上，避免整行覆盖把它们清掉
+      waist: existing?.waist ?? null,
+      hip: existing?.hip ?? null,
+    })
+    if (!result.success) {
+      setWeightError('体重需在 20–400 千克之间。')
+      return
+    }
+    if (await commit({ kind: 'metric', value: result.data })) {
+      setWeightError('')
+      setEditingWeight(false)
+      setWeight('')
+    } else setWeightError('体重未获保存确认，输入已保留。')
+  }
+  /** 变化只做中性描述：不加箭头，不用红绿，体重不是成绩 */
+  function weightHint() {
+    if (!latestWeight) return '还没有记录过体重。'
+    const parts: string[] = []
+    if (previousWeight) {
+      const delta = Math.round((latestWeight.weight! - previousWeight.weight!) * 10) / 10
+      parts.push(
+        delta === 0 ? '和上次差不多' : `比上次${delta > 0 ? '多' : '少'} ${Math.abs(delta)} kg`,
+      )
+    } else parts.push('第一次记录')
+    if (latestWeight.date !== today) parts.push(`最近一次 ${displayDate(latestWeight.date)}`)
+    return parts.join(' · ')
   }
   /** 云端只对作者显示删除入口；真正的边界在 herfit_delete_workout 里 */
   function canDelete(id: string) {
@@ -201,6 +244,66 @@ export default function Records() {
           ))}
         </div>
       </section>
+      <section className="panel weight-panel">
+        <div className="section-heading">
+          <h2>体重</h2>
+        </div>
+        {data.settings.showWeight ? (
+          <>
+            <p className="weight-value">
+              <strong>{latestWeight?.weight ?? '—'}</strong>
+              <span>kg</span>
+            </p>
+            <p className="small-muted">{weightHint()}</p>
+            {editingWeight ? (
+              <div className="weight-form">
+                <Field label="今天的体重（kg）">
+                  <input
+                    type="number"
+                    min="20"
+                    max="400"
+                    step="0.1"
+                    value={weight}
+                    autoFocus
+                    onChange={(e) => setWeight(e.target.value)}
+                  />
+                </Field>
+                <button className="button secondary" disabled={busy} onClick={saveWeight}>
+                  保存
+                </button>
+                <button className="text-button" onClick={() => setEditingWeight(false)}>
+                  取消
+                </button>
+              </div>
+            ) : (
+              <button
+                className="text-button weight-action"
+                onClick={() => {
+                  // 只在今天已有记录时预填，避免把上次的数当成今天的新数据
+                  setWeight(todayWeight ? String(todayWeight.weight) : '')
+                  setWeightError('')
+                  setEditingWeight(true)
+                }}
+              >
+                {todayWeight ? '更新今天的体重' : '记录体重'}
+              </button>
+            )}
+            {weightError ? (
+              <p className="form-error" role="alert">
+                {weightError}
+              </p>
+            ) : null}
+            <p className="small-muted weight-note">体重只是参考，不设目标，也不计入任何评分。</p>
+          </>
+        ) : (
+          <>
+            <p className="small-muted">体重记录已隐藏</p>
+            <Link className="text-button" to="/me#showWeight">
+              在设置里打开
+            </Link>
+          </>
+        )}
+      </section>
       <section className="panel body-panel">
         <div className="section-heading">
           <h2>
@@ -209,24 +312,8 @@ export default function Records() {
           </h2>
           <span className="soft-label">全部选填</span>
         </div>
-        <p className="small-muted">
-          同一天再次保存会更新已填写的指标；空白项保持原记录。
-          {data.settings.showWeight ? '' : '体重记录已隐藏，可在「我的」开启。'}
-        </p>
+        <p className="small-muted">同一天再次保存会更新已填写的指标；空白项保持原记录。</p>
         <div className="metric-form">
-          {data.settings.showWeight ? (
-            <Field label="体重（kg）">
-              <input
-                type="number"
-                min="20"
-                max="400"
-                step="0.1"
-                value={weight}
-                onChange={(e) => setWeight(e.target.value)}
-                placeholder="选填"
-              />
-            </Field>
-          ) : null}
           <Field label="腰围（cm）">
             <input
               type="number"

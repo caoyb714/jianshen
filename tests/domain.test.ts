@@ -6,7 +6,7 @@ import { readJson, removeKey, writeJson } from '../src/app/storage'
 import { loadData, saveData, STORAGE_KEY } from '../src/domain/repository'
 import { makeSeed, PROFILE_A } from '../src/domain/seed'
 import { applyChange } from '../src/domain/change'
-import { summarize, weeklyReview } from '../src/domain/stats'
+import { summarize, weeklyReview, latestWeights } from '../src/domain/stats'
 
 const source = (path: string) => readFileSync(new URL(`../src/${path}`, import.meta.url), 'utf8')
 
@@ -213,6 +213,29 @@ describe('删除训练记录', () => {
     expect(applyChange(once, change).workouts).toEqual(once.workouts)
   })
 })
+describe('体重派生', () => {
+  const metric = (date: string, weight: number | null) => ({
+    profileId: PROFILE_A,
+    id: `m-${date}`,
+    date,
+    weight,
+    waist: null,
+    hip: null,
+  })
+  it('只取有效体重，按日期倒序，忽略 null、0 与 20 以下的旧值', () => {
+    const rows = [
+      metric('2026-11-01', 55),
+      metric('2026-11-05', 54.5),
+      metric('2026-11-08', 19.9),
+      metric('2026-11-10', 0),
+      metric('2026-11-20', null),
+    ]
+    expect(latestWeights(rows).map((row) => row.weight)).toEqual([54.5, 55])
+    expect(latestWeights(rows, 1).map((row) => row.date)).toEqual(['2026-11-05'])
+    expect(latestWeights([])).toEqual([])
+  })
+})
+
 describe('derived progress', () => {
   it('does not invent growth for an empty history', () => {
     const data = makeSeed()

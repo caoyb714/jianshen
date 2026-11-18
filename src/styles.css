@@ -907,6 +907,73 @@ main {
 .body-panel {
   margin-bottom: 30px;
 }
+/* 体重块：单源展示，变化只做中性描述，不设目标也不计分 */
+.weight-panel {
+  margin-bottom: 24px;
+}
+.weight-value {
+  display: flex;
+  align-items: baseline;
+  gap: 3px;
+  margin: 8px 0 4px;
+}
+.weight-value strong {
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink, #494047);
+}
+.weight-value span {
+  font-size: 13px;
+  color: var(--muted);
+}
+.weight-action {
+  margin: 8px 0 0 -8px;
+}
+.weight-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  margin: 12px 0 0;
+}
+.weight-form .field {
+  flex: 1 1 160px;
+  margin: 0;
+}
+.weight-note {
+  margin-top: 12px;
+}
+.weight-mirror {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #fffcfa;
+  padding: 14px 20px;
+  margin-bottom: 24px;
+}
+.weight-mirror span {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+}
+.weight-mirror strong {
+  display: block;
+  font-size: 18px;
+  color: var(--ink, #494047);
+  font-variant-numeric: tabular-nums;
+}
+.weight-mirror small {
+  font-size: 12px;
+  color: #8a7580;
+}
+#showWeight {
+  scroll-margin-block: 16px;
+}
 .history-list {
   border-top: 1px solid var(--border);
 }

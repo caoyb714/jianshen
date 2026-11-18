@@ -65,7 +65,7 @@ export function toAppData(snapshot: Snapshot, pendingId?: string): AppData {
     metrics: snapshot.metrics.map((row) => row.value),
     workouts: snapshot.workouts.map((row) => row.value),
     plans: snapshot.plans.map((row) => row.value),
-    settings: snapshot.settings?.value ?? { showWeight: false },
+    settings: snapshot.settings?.value ?? { showWeight: true },
   }
 }
 
