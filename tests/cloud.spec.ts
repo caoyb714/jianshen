@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync } from 'node:fs'
 import { PGlite } from '@electric-sql/pglite'
 import { test, expect, type BrowserContext, type Page, type Route } from '@playwright/test'
+import { makeSeed } from '../src/domain/seed'
 
 const origin = 'https://herfit-stage2-test.supabase.co'
 const users = {
@@ -78,9 +79,10 @@ async function emulateSupabase(contexts: BrowserContext[]) {
     const uid = tokens.get(token)
     if (!uid) return reply({ code: '42501', message: 'not signed in' }, 401)
     const write = path.endsWith('/herfit_write')
-    if (!write && !path.endsWith('/herfit_snapshot'))
+    const remove = path.endsWith('/herfit_delete_workout')
+    if (!write && !remove && !path.endsWith('/herfit_snapshot'))
       return reply({ message: 'unexpected API route' }, 404)
-    if (write && failNextWrite) {
+    if ((write || remove) && failNextWrite) {
       failNextWrite = false
       return reply({ code: '22000', message: 'test write rejection' }, 400)
     }
@@ -89,7 +91,7 @@ async function emulateSupabase(contexts: BrowserContext[]) {
         `begin; set local role authenticated; set local "request.jwt.claim.sub" = '${uid}';`,
       )
       try {
-        const args = write ? request.postDataJSON() : null
+        const args = write || remove ? request.postDataJSON() : null
         const result = write
           ? await db.query<{ value: unknown }>(
               'select public.herfit_write($1,$2,$3,$4,$5) as value',
@@ -101,7 +103,12 @@ async function emulateSupabase(contexts: BrowserContext[]) {
                 args.p_expected,
               ],
             )
-          : await db.query<{ value: unknown }>('select public.herfit_snapshot() as value')
+          : remove
+            ? await db.query<{ value: unknown }>(
+                'select public.herfit_delete_workout($1,$2,$3) as value',
+                [args.p_workspace, args.p_profile, args.p_record],
+              )
+            : await db.query<{ value: unknown }>('select public.herfit_snapshot() as value')
         await db.exec('commit')
         await reply(result.rows[0].value)
       } catch (error) {
@@ -124,6 +131,26 @@ async function emulateSupabase(contexts: BrowserContext[]) {
     },
     rejectNextWrite: () => {
       failNextWrite = true
+    },
+    /** 直接以某个成员身份写入一条训练记录，省去走完整训练流程 */
+    seedWorkout: async (userId: string, id: string) => {
+      const log = { ...makeSeed().workouts[0], profileId: profile, id }
+      await db.exec(
+        `begin; set local role authenticated; set local "request.jwt.claim.sub" = '${userId}';`,
+      )
+      try {
+        await db.query('select public.herfit_write($1,$2,$3,$4,$5)', [
+          space,
+          profile,
+          'workout',
+          JSON.stringify(log),
+          null,
+        ])
+        await db.exec('commit')
+      } catch (error) {
+        await db.exec('rollback')
+        throw error
+      }
     },
   }
 }
@@ -188,6 +215,55 @@ test('two members share records, preserve failed forms and exclude outsiders', a
   } finally {
     await partner.close()
     await stranger.close()
+    await fixture.close()
+  }
+})
+
+test('shares one record but lets only its author delete it', async ({
+  page,
+  context,
+  browser,
+}, testInfo) => {
+  test.setTimeout(90000)
+  const options = { viewport: testInfo.project.use.viewport }
+  const partner = await browser.newContext(options)
+  const fixture = await emulateSupabase([context, partner])
+  try {
+    const b = await partner.newPage()
+    await login(page, 'a@example.invalid')
+    await page.getByLabel('昵称').fill('测试档案')
+    await page.getByLabel('年龄').fill('26')
+    await page.getByLabel('身高（cm）').fill('165')
+    await page.getByLabel('每周可安排天数').fill('3')
+    await page.getByLabel('每次可安排分钟').fill('25')
+    await page.getByLabel('我已检查并确认上述身体限制').check()
+    await page.getByRole('button', { name: '保存共享档案' }).click()
+    await expect(page.getByRole('heading', { name: '慢慢来，也在变好。' })).toBeVisible()
+
+    await fixture.seedWorkout(users['a@example.invalid'], '30000000-0000-4000-8000-000000000001')
+    await page.reload()
+    await page.goto('/records')
+    const mine = page.locator('.history-row').first()
+    await mine.locator('summary').click()
+    await expect(mine.getByRole('button', { name: '删除这条记录' })).toBeVisible()
+
+    // 另一位成员能读到同一条记录，但没有删除入口
+    await login(b, 'b@example.invalid')
+    await b.goto('/records')
+    const shared = b.locator('.history-row').first()
+    await shared.locator('summary').click()
+    await expect(shared.getByText('只有作者可以删除')).toBeVisible()
+    await expect(shared.getByRole('button', { name: '删除这条记录' })).toHaveCount(0)
+
+    await mine.getByRole('button', { name: '删除这条记录' }).click()
+    await mine.getByRole('button', { name: '确认删除' }).click()
+    await expect(page.getByText('已从共享空间删除这条记录')).toBeVisible()
+    await expect(page.locator('.history-row')).toHaveCount(0)
+    // 另一位成员刷新后看到同一条记录已消失
+    await b.reload()
+    await expect(b.locator('.history-row')).toHaveCount(0)
+  } finally {
+    await partner.close()
     await fixture.close()
   }
 })

@@ -35,6 +35,11 @@ const REQUIRED_RPCS = {
     p_payload: null,
     p_expected: null,
   }),
+  herfit_delete_workout: JSON.stringify({
+    p_workspace: null,
+    p_profile: null,
+    p_record: null,
+  }),
 }
 
 function fail(message, hint) {
@@ -134,7 +139,7 @@ if (env) {
     }
     if (missingRpcs.length)
       fail(`缺少函数：${missingRpcs.join('、')}`, '迁移尚未应用，见 docs/GO-LIVE.md 第 3 步。')
-    else console.log('✓ herfit_snapshot / herfit_write 已就绪')
+    else console.log('✓ herfit_snapshot / herfit_write / herfit_delete_workout 已就绪')
 
     if (!process.exitCode) {
       console.log('\n全部通过。运行 npm run dev，用预先创建的账号登录即可。')

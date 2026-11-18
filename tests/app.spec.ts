@@ -87,6 +87,33 @@ test('discomfort stops activity and is saved explicitly', async ({ page }) => {
   await expect(page.getByText('因不适停止').first()).toBeVisible()
 })
 
+test('deletes a single workout record only after confirmation', async ({ page }) => {
+  await startSession(page)
+  await page
+    .getByRole('button', { name: /第 1 组完成/ })
+    .first()
+    .click()
+  await page.getByRole('button', { name: '结束并填写反馈' }).click()
+  await page.getByRole('button', { name: '保存本机训练记录' }).click()
+  await expect(page).toHaveURL(/records/)
+
+  const rows = page.locator('.history-row')
+  await expect(rows.first()).toBeVisible()
+  const before = await rows.count(),
+    first = rows.first()
+  await first.locator('summary').click()
+  // 先取消：条数不变
+  await first.getByRole('button', { name: '删除这条记录' }).click()
+  await first.getByRole('button', { name: '取消' }).click()
+  await expect(rows).toHaveCount(before)
+  // 二次确认后才删除，并写入本机存储
+  await first.getByRole('button', { name: '删除这条记录' }).click()
+  await first.getByRole('button', { name: '确认删除' }).click()
+  await expect(rows).toHaveCount(before - 1)
+  await page.reload()
+  await expect(rows).toHaveCount(before - 1)
+})
+
 test('swaps an exercise mid-session without losing the plan', async ({ page }) => {
   await startSession(page)
   const before = await page.locator('.exercise-row h2').first().innerText()

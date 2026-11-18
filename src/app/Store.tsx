@@ -36,6 +36,7 @@ type Store = {
   error: string | null
   notice: string
   commit: (change: Change, formRevision?: number) => Promise<boolean>
+  removeWorkout: (id: string) => Promise<boolean>
   replace?: (data: AppData) => boolean
   setHabit: (patch: Partial<Omit<Habit, 'profileId' | 'date'>>) => Promise<boolean>
   adjustWater: (delta: number) => Promise<boolean>
@@ -45,6 +46,7 @@ type Store = {
   cloud?: {
     snapshot: Snapshot
     account: string
+    viewerId: string
     refresh: () => Promise<void>
     signOut: () => Promise<void>
   }
@@ -136,6 +138,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
     return replace(applyChange(current.current, change))
   }
+  async function removeWorkout(id: string) {
+    const removed = await commit({ kind: 'deleteWorkout', profileId: activeId, id })
+    if (removed) notify('已删除这条训练记录')
+    return removed
+  }
   async function switchProfile(id: string) {
     if (!current.current.profiles.some((item) => item.id === id)) return false
     setActiveId(id)
@@ -180,6 +187,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         error,
         notice,
         commit,
+        removeWorkout,
         busy: false,
         replace,
         setHabit,

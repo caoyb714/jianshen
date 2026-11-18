@@ -121,6 +121,7 @@ export default function CloudGate({
         key={session.user.id}
         client={client}
         account={session.user.email ?? ''}
+        viewerId={session.user.id}
         signOut={signOut}
       >
         {children}

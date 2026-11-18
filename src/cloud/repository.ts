@@ -40,7 +40,7 @@ const snapshotSchema = z.object({
 })
 export type Snapshot = z.infer<typeof snapshotSchema>
 export class CloudError extends Error {
-  constructor(public readonly kind: 'denied' | 'conflict' | 'invalid' | 'network') {
+  constructor(public readonly kind: 'denied' | 'conflict' | 'invalid' | 'network' | 'notOwner') {
     super(kind)
   }
 }
@@ -69,8 +69,15 @@ export function toAppData(snapshot: Snapshot, pendingId?: string): AppData {
   }
 }
 
-function unpack(data: unknown, error: { code?: string } | null, status: number): Snapshot {
+function unpack(
+  data: unknown,
+  error: { code?: string; message?: string } | null,
+  status: number,
+): Snapshot {
   if (error !== null) {
+    // 删除他人记录同样返回 42501，但语义是"不是作者"而不是"没有空间权限"：
+    // 不区分的话界面会把整个共享空间判为不可访问并清空已加载数据
+    if (error.message?.includes('not the record author')) throw new CloudError('notOwner')
     if (status === 401 || status === 403 || error.code === '42501') throw new CloudError('denied')
     if (error.code === '40001' || error.code === '23505') throw new CloudError('conflict')
     if (['23514', '22007', '22008', '22P02'].includes(error.code ?? ''))
@@ -100,6 +107,16 @@ export function createRepository(client: SupabaseClient) {
       }),
     save: (current: Snapshot, change: Change, formRevision?: number, profileId?: string) =>
       withTimeout(async (signal) => {
+        if (change.kind === 'deleteWorkout') {
+          const { data, error, status } = await client
+            .rpc('herfit_delete_workout', {
+              p_workspace: current.workspaceId,
+              p_profile: change.profileId,
+              p_record: change.id,
+            })
+            .abortSignal(signal)
+          return unpack(data, error, status)
+        }
         const expected = revisionFor(current, change, formRevision)
         const { data, error, status } = await client
           .rpc('herfit_write', {
@@ -119,6 +136,7 @@ export function createRepository(client: SupabaseClient) {
 function profileIdOf(change: Change): string | undefined {
   if (change.kind === 'profile') return change.profileId
   if (change.kind === 'settings') return undefined
+  if (change.kind === 'deleteWorkout') return change.profileId
   return change.value.profileId
 }
 
@@ -148,6 +166,7 @@ function revisionFor(current: Snapshot, change: Change, formRevision?: number) {
       return current.settings?.revision ?? null
     case 'workout':
     case 'plan':
+    case 'deleteWorkout':
       return null
   }
 }

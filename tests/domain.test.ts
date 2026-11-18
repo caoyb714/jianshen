@@ -5,6 +5,7 @@ import { getExercise, loadHint } from '../src/domain/exercises'
 import { readJson, removeKey, writeJson } from '../src/app/storage'
 import { loadData, saveData, STORAGE_KEY } from '../src/domain/repository'
 import { makeSeed, PROFILE_A } from '../src/domain/seed'
+import { applyChange } from '../src/domain/change'
 import { summarize, weeklyReview } from '../src/domain/stats'
 
 const source = (path: string) => readFileSync(new URL(`../src/${path}`, import.meta.url), 'utf8')
@@ -194,6 +195,22 @@ describe('demo persistence', () => {
       },
     }
     expect(() => saveData(storage, makeSeed())).toThrow()
+  })
+})
+describe('删除训练记录', () => {
+  it('只移除指定档案的那一条，重复执行不再改变数据', () => {
+    const data = makeSeed(),
+      target = data.workouts[0]
+    // 同 id 但归属另一个档案：删除必须按 profileId 限定，不能误删
+    const twin = { ...target, profileId: 'profile-b' },
+      seeded = { ...data, workouts: [...data.workouts, twin] },
+      change = { kind: 'deleteWorkout' as const, profileId: target.profileId, id: target.id }
+    const once = applyChange(seeded, change)
+    expect(once.workouts).toHaveLength(seeded.workouts.length - 1)
+    expect(once.workouts.some((row) => row.profileId === 'profile-b' && row.id === target.id)).toBe(
+      true,
+    )
+    expect(applyChange(once, change).workouts).toEqual(once.workouts)
   })
 })
 describe('derived progress', () => {

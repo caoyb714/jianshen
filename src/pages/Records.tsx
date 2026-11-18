@@ -1,6 +1,15 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Droplet, Moon, Activity, ArrowUpRight, Check, Dumbbell, ChevronDown } from 'lucide-react'
+import {
+  Droplet,
+  Moon,
+  Activity,
+  ArrowUpRight,
+  Check,
+  Dumbbell,
+  ChevronDown,
+  Trash2,
+} from 'lucide-react'
 import { useProfile } from '../app/Store'
 import { PageHeading, Field, MoodPicker, EmptyState, SectionHeading } from '../components/UI'
 import { emptyHabit } from '../domain/seed'
@@ -8,7 +17,18 @@ import { metricSchema } from '../domain/model'
 import { displayDate } from '../domain/dates'
 import { isComplete } from '../domain/stats'
 export default function Records() {
-  const { active, today, setHabit, commit, adjustWater, ensureToday, busy, data } = useProfile(),
+  const {
+      active,
+      today,
+      setHabit,
+      commit,
+      adjustWater,
+      ensureToday,
+      busy,
+      data,
+      removeWorkout,
+      cloud,
+    } = useProfile(),
     habit = active.habits.find((h) => h.date === today) ?? emptyHabit(active.id, today)
   const [sleep, setSleep] = useState(String(habit.sleep ?? '')),
     [water, setWater] = useState('250'),
@@ -16,7 +36,8 @@ export default function Records() {
     [waist, setWaist] = useState(''),
     [hip, setHip] = useState(''),
     [error, setError] = useState(''),
-    [sleepError, setSleepError] = useState('')
+    [sleepError, setSleepError] = useState(''),
+    [pendingDelete, setPendingDelete] = useState<string | null>(null)
   useEffect(() => {
     const current = active.habits.find((h) => h.date === today)
     setSleep(String(current?.sleep ?? ''))
@@ -62,6 +83,14 @@ export default function Records() {
       setWaist('')
       setHip('')
     } else setError('身体记录未获保存确认，输入已保留。')
+  }
+  /** 云端只对作者显示删除入口；真正的边界在 herfit_delete_workout 里 */
+  function canDelete(id: string) {
+    if (!cloud) return true
+    return cloud.snapshot.workouts.find((row) => row.value.id === id)?.createdBy === cloud.viewerId
+  }
+  async function remove(id: string) {
+    if (await removeWorkout(id)) setPendingDelete(null)
   }
   return (
     <>
@@ -273,6 +302,32 @@ export default function Records() {
                     </p>
                   )
                 })}
+                <div className="history-actions">
+                  {pendingDelete === log.id ? (
+                    <>
+                      <span className="small-muted">删除后无法恢复，统计会随之变化。</span>
+                      <button
+                        className="text-button danger"
+                        disabled={busy}
+                        onClick={() => void remove(log.id)}
+                      >
+                        确认删除
+                      </button>
+                      <button className="text-button" onClick={() => setPendingDelete(null)}>
+                        取消
+                      </button>
+                    </>
+                  ) : canDelete(log.id) ? (
+                    <button className="text-button" onClick={() => setPendingDelete(log.id)}>
+                      <Trash2 size={14} />
+                      删除这条记录
+                    </button>
+                  ) : (
+                    <span className="small-muted">
+                      这条记录由另一位成员创建，只有作者可以删除。
+                    </span>
+                  )}
+                </div>
               </div>
             </details>
           ))}

@@ -1,9 +1,10 @@
 # 数据库设计（阶段 2 建表，阶段 3 扩展）
 
-以 `supabase/migrations/` 下的迁移为准。当前有两个迁移，按文件名顺序执行：
+以 `supabase/migrations/` 下的迁移为准。当前有三个迁移，按文件名顺序执行：
 
 1. `20261116000100_shared_workspace.sql`：空间、成员、档案、习惯、指标、训练记录、个人设置，RLS 与 RPC。
 2. `20261116000200_stage3_profiles_plans.sql`：双档案位、训练计划、逐组训练记录校验、多档案快照。
+3. `20261118000100_delete_workout.sql`：独立的 `herfit_delete_workout` 删除函数，只允许作者删自己的训练记录。
 
 ## 表与关系
 
@@ -47,6 +48,16 @@
 - 写入 `plan` 且 `status='active'` 时，先把同档案的其他 active 计划归档。
 - 档案位不存在时，仅 `p_kind='profile'` 允许插入；槽位由数据库计算，最多两个。
 
+## 删除约定
+
+`herfit_delete_workout(p_workspace, p_profile, p_record)`
+
+- `workout_logs` 对 `authenticated` **没有 delete 权限，也没有 delete 策略**：浏览器直接 `delete from workout_logs` 一律 42501。这是有意的纵深防御，测试里名为「blocks browser deletion」。
+- 因此删除函数是 `security definer`（唯一一个），权限边界全部落在函数体：先校验成员资格，再 `delete ... where created_by = auth.uid()`。
+- 删除 0 行但记录仍在 → 说明不是作者，抛 42501 且 message 为 `not the record author`；客户端据此与「没有空间权限」区分，避免整站被判定为不可访问。
+- 记录已不存在 → 返回快照，按幂等成功处理（网络重试不报错）。
+- 不扩展 `herfit_write`：它体量大且带 `valid_payload` 校验，改动风险高于新增独立函数。
+
 ## 测试要求
 
-`tests/cloud-db.test.ts` 用 PGlite 执行真实迁移并模拟 `auth.uid()`，覆盖：两个档案位上限、跨空间拒绝、成员表自我加入拒绝、审计字段伪造拒绝、同日并发写冲突、逐组载荷非法值拒绝、计划唯一生效、座席撤销后失去访问。不能只靠隐藏 UI。
+`tests/cloud-db.test.ts` 用 PGlite 执行真实迁移并模拟 `auth.uid()`，覆盖：两个档案位上限、跨空间拒绝、成员表自我加入拒绝、审计字段伪造拒绝、同日并发写冲突、逐组载荷非法值拒绝、计划唯一生效、记录删除的作者校验与幂等、座席撤销后失去访问。不能只靠隐藏 UI。

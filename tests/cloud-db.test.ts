@@ -292,6 +292,33 @@ it('rejects a malformed plan payload', async () => {
   })
 })
 
+it('lets only the author delete a record, and treats a retry as success', async () => {
+  const log = { ...seed.workouts[0], id: '30000000-0000-0000-0000-000000000010' }
+  await asUser(a, () => write('workout', log, null))
+  const remove = () =>
+    db.query<{ value: Snapshot }>('select public.herfit_delete_workout($1,$2,$3) as value', [
+      space,
+      profile,
+      log.id,
+    ])
+
+  // 同空间的另一位成员不能删：不是作者，必须报错而不是静默成功
+  await expect(asUser(b, remove)).rejects.toMatchObject({
+    code: '42501',
+    message: expect.stringContaining('not the record author'),
+  })
+  // 空间外的成员连成员资格都过不了
+  await expect(asUser(stranger, remove)).rejects.toMatchObject({ code: '42501' })
+  // 未登录一律拒绝
+  await expect(asUser(null, remove)).rejects.toMatchObject({ code: '42501' })
+
+  const after = await asUser(a, remove)
+  expect(after.rows[0].value.workouts.some((row) => row.value.id === log.id)).toBe(false)
+  // 记录已不在，重试按幂等成功处理
+  const retried = await asUser(a, remove)
+  expect(retried.rows[0].value.workouts.some((row) => row.value.id === log.id)).toBe(false)
+})
+
 it('removes data access when a workspace seat is revoked', async () => {
   await db.query('delete from public.workspace_members where workspace_id=$1 and user_id=$2', [
     space,

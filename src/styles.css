@@ -964,6 +964,19 @@ main {
 .history-detail p {
   margin-bottom: 6px;
 }
+/* 删除入口放在展开区，避免与 summary 的折叠点击冲突 */
+.history-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+.history-actions .small-muted {
+  flex: 1 1 180px;
+}
 .growth-summary {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

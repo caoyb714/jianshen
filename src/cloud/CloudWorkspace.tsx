@@ -12,11 +12,12 @@ import { CloudCard } from './CloudCard'
 type Props = {
   client: SupabaseClient
   account: string
+  viewerId: string
   signOut: () => Promise<void>
   children: ReactNode
 }
 
-export function CloudWorkspace({ client, account, signOut, children }: Props) {
+export function CloudWorkspace({ client, account, viewerId, signOut, children }: Props) {
   const repository = useMemo(() => createRepository(client), [client])
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -113,7 +114,7 @@ export function CloudWorkspace({ client, account, signOut, children }: Props) {
       if (id !== request.current) return false
       keep(fresh)
       setError(null)
-      notify('已保存到共享空间')
+      notify(change.kind === 'deleteWorkout' ? '已从共享空间删除这条记录' : '已保存到共享空间')
       return true
     } catch (failure) {
       if (id !== request.current) return false
@@ -122,6 +123,11 @@ export function CloudWorkspace({ client, account, signOut, children }: Props) {
         setError('当前账号无法访问此共享空间，请联系空间管理员。')
       } else if (failure instanceof CloudError && failure.kind === 'conflict') {
         notify('记录已在另一处修改。请查看最新记录后再保存档案或数据。')
+        inFlight.current = null
+        await refresh()
+        setBusy(false)
+      } else if (failure instanceof CloudError && failure.kind === 'notOwner') {
+        notify('这条记录由另一位成员创建，只有作者可以删除。')
         inFlight.current = null
         await refresh()
         setBusy(false)
@@ -167,6 +173,10 @@ export function CloudWorkspace({ client, account, signOut, children }: Props) {
       kind: 'habit',
       value: { ...habit, water: Math.max(0, Math.min(10000, habit.water + delta)) },
     })
+  }
+  async function removeWorkout(id: string) {
+    if (!active) return false
+    return commit({ kind: 'deleteWorkout', profileId: active.id, id })
   }
 
   if (!snapshot || !data || !active)
@@ -231,12 +241,13 @@ export function CloudWorkspace({ client, account, signOut, children }: Props) {
         error,
         notice,
         commit,
+        removeWorkout,
         setHabit,
         adjustWater,
         ensureToday,
         busy,
         notify,
-        cloud: { snapshot, account, refresh, signOut },
+        cloud: { snapshot, account, viewerId, refresh, signOut },
       }}
     >
       {children}

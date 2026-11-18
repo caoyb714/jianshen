@@ -1,5 +1,14 @@
 # 给下一位 AI 的交接说明
 
+## v0.7 新进展（记录删除）
+
+- 记录页每条训练记录展开后可「删除这条记录」，需再点一次「确认删除」；演示模式直接过滤本机数组，云端走独立 RPC。
+- `supabase/migrations/20261118000100_delete_workout.sql` 新增 `herfit_delete_workout(p_workspace,p_profile,p_record)`。**这是唯一的 `security definer` 函数**：`workout_logs` 对 `authenticated` 没有 delete 权限也没有 delete 策略，只能靠函数体内的「成员资格 + `created_by = auth.uid()`」把关。
+- 非作者删除返回 42501，message 为 `not the record author`；`src/cloud/repository.ts` 把它映射为 `CloudError('notOwner')`，避免被当成空间越权而清空整站数据。记录已不存在时按幂等成功处理。
+- 云端界面只对作者显示删除入口（比对快照里的 `createdBy` 与当前登录用户），服务端仍是真正的边界。
+- 验收：`npm test` 94/94；`npm run test:e2e` 38/38（演示模式，新增 2 项）；`HERFIT_TEST_CLOUD=1 npm run test:e2e` 4/4（新增「只有作者能删」）；`npm run build` 通过。
+- **迁移尚未应用到线上 Supabase**：`.env.setup.local` 里的 `SUPABASE_ACCESS_TOKEN` 已失效（Management API 返回 `Invalid access token`）。在拿到新令牌前不要部署前端——`herfit_delete_workout` 不存在时删除会失败。补上令牌后执行 `node scripts/apply-sql.mjs supabase/migrations/20261118000100_delete_workout.sql`，再用 `npm run verify:cloud` 确认三个 RPC 齐全。
+
 ## v0.6 新进展（可选 AI 说明，方案 A）
 
 - 训练页新增「今日说明」：**只解释已经由规则引擎算好的当天计划**，不参与生成、不写库、不改任何数字。
@@ -50,7 +59,7 @@
 
 1. 按 [STAGE2.md](STAGE2.md) 的「接入你们的 Supabase 项目」接通真实项目，跑两个档案位的双向读写与越权测试。
 2. 真机验证：iPhone Safari 添加到主屏幕、Android Chrome 安装、断网提示、组间休息计时在后台的表现。
-3. 之后再考虑：动作示范图、训练草稿持久化、推送提醒、计划内单日编辑、记录删除。
+3. 之后再考虑：动作示范图、推送提醒、计划内单日编辑（需先定「改单日是否产生新版本」的语义）。
 
 ## 当前实现
 
@@ -85,7 +94,8 @@ E2E 两个项目都用 Chromium，分别是桌面尺寸与 iPhone 13 尺寸模�
 
 - 动作库没有图片/视频；文字内容是自撰，未经专业审核。
 - 计划只能整份重新生成，不能改单日动作。
-- 训练草稿不持久化，离开页面会丢失；界面已提示。
+- 训练记录删除后无法在应用内恢复；只能删自己创建的记录。
+- 训练草稿存在本机 `herfit.workoutDraft.v1`，刷新可恢复，但不跨设备同步。
 - 云端设置项（是否显示体重）按 Supabase 用户存储，与档案无关。
 - 本机 JSON 未加密；演示模式不要录真实健康数据。
 - 免费额度、暂停政策、域名归属需部署时重新核对。

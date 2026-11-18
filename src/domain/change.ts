@@ -5,6 +5,8 @@ export type Change =
   | { kind: 'habit'; value: Habit }
   | { kind: 'metric'; value: Metric }
   | { kind: 'workout'; value: Workout }
+  /** 删除训练记录：本机直接过滤，云端走独立 RPC（herfit_write 不支持删除） */
+  | { kind: 'deleteWorkout'; profileId: string; id: string }
   | { kind: 'plan'; value: TrainingPlan }
   | { kind: 'settings'; value: AppData['settings'] }
 
@@ -42,6 +44,13 @@ export function applyChange(data: AppData, change: Change): AppData {
       return {
         ...data,
         workouts: [change.value, ...data.workouts.filter((row) => row.id !== change.value.id)],
+      }
+    case 'deleteWorkout':
+      return {
+        ...data,
+        workouts: data.workouts.filter(
+          (row) => !(row.id === change.id && row.profileId === change.profileId),
+        ),
       }
     case 'plan':
       return {
