@@ -6,6 +6,8 @@ import { readJson, removeKey, writeJson } from '../src/app/storage'
 import { loadData, saveData, STORAGE_KEY } from '../src/domain/repository'
 import { makeSeed, PROFILE_A } from '../src/domain/seed'
 import { applyChange } from '../src/domain/change'
+import { generatePlan } from '../src/domain/engine'
+import { trainingPlanSchema } from '../src/domain/model'
 import { summarize, weeklyReview, latestWeights } from '../src/domain/stats'
 
 const source = (path: string) => readFileSync(new URL(`../src/${path}`, import.meta.url), 'utf8')
@@ -295,5 +297,48 @@ describe('周复盘', () => {
       waterAverage: null,
     })
     expect(text).toBe('这周还没有完成训练。从下一次开始就好。')
+  })
+})
+
+describe('计划的可追溯字段', () => {
+  const base = {
+    profileId: PROFILE_A,
+    id: '55555555-5555-4555-8555-555555555555',
+    version: 2,
+    generatedAt: '2026-11-18T10:00:00.000Z',
+    confirmedAt: '2026-11-18T10:00:00.000Z',
+    status: 'active' as const,
+    input: {
+      age: 28,
+      experience: '偶尔运动' as const,
+      weeklyDays: 3,
+      sessionMinutes: 30,
+      equipment: ['徒手'] as const,
+      restrictions: '',
+    },
+    notes: [],
+  }
+  const generated = generatePlan({
+    ...base.input,
+    restrictionsConfirmed: true,
+    equipment: ['徒手'],
+  })
+  if (!generated.ok) throw new Error(generated.message)
+  const plan = { ...base, days: generated.days }
+
+  it('老计划没有新字段也能解析', () => {
+    expect(trainingPlanSchema.safeParse(plan).success).toBe(true)
+  })
+
+  it('带基线与已应用条目时能解析，字段可缺省', () => {
+    const traced = {
+      ...plan,
+      baselineVersion: 1,
+      appliedAdjustments: [{ sig: 'goblet-squat:increase:1', name: '高脚杯深蹲', label: '+1 kg' }],
+      editedBy: 'local',
+    }
+    const parsed = trainingPlanSchema.safeParse(traced)
+    expect(parsed.success).toBe(true)
+    if (parsed.success) expect(parsed.data.baselineVersion).toBe(1)
   })
 })

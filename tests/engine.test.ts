@@ -5,6 +5,7 @@ import {
   generatePlan,
   isDeloadWeek,
   setsFor,
+  trainingWeekNumber,
   suggest,
   targetFor,
   type EngineInput,
@@ -271,6 +272,28 @@ describe('渐进负荷建议', () => {
     expect(isDeloadWeek(4)).toBe(true)
     expect(isDeloadWeek(8)).toBe(true)
     expect(isDeloadWeek(3)).toBe(false)
+  })
+
+  it('第 4 周生成的计划组数更少、负荷更低，并写明原因', () => {
+    const normal = plan()
+    const deload = plan({ weekNumber: 4 })
+    const firstNormal = normal.days.find((day) => day.kind === '训练')!
+    const firstDeload = deload.days.find((day) => day.kind === '训练')!
+    expect(firstDeload.slots[0].sets).toBe(Math.max(1, firstNormal.slots[0].sets - 1))
+    expect(deload.notes.join('')).toContain('降载')
+    // 休息与恢复日不受影响
+    expect(deload.days.filter((day) => day.kind !== '训练')).toEqual(
+      normal.days.filter((day) => day.kind !== '训练'),
+    )
+  })
+
+  it('训练周序号按最早记录起算，没有记录时为 0', () => {
+    expect(trainingWeekNumber([], '2026-11-18')).toBe(0)
+    expect(trainingWeekNumber([{ date: '2026-11-16' }], '2026-11-18')).toBe(1)
+    expect(trainingWeekNumber([{ date: '2026-11-08' }, { date: '2026-11-15' }], '2026-11-18')).toBe(
+      2,
+    )
+    expect(trainingWeekNumber([{ date: '2026-10-21' }], '2026-11-18')).toBe(5)
   })
 })
 

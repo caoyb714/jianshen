@@ -314,8 +314,13 @@ test('adopting a suggestion stays a draft until the version is generated', async
   await expect(page.getByText(/v2 · 生成于/)).toBeVisible()
   await expect(card.getByText(/已生效 · v2/)).toBeVisible()
 
-  // 撤销走基线重算，生成 v3 而不是改回 v1
-  await card.getByRole('button', { name: '撤销并生成新版本' }).click()
+  // 刷新后「已生效」与恢复入口都还在：状态存在计划里，不只存在内存里
+  await page.reload()
+  await expect(page.getByText(/v2 · 生成于/)).toBeVisible()
+  await expect(card.getByText(/已生效 · v2/)).toBeVisible()
+
+  // 恢复到 v1 的安排，同样生成新版本（v3），历史不被改写
+  await card.getByRole('button', { name: /恢复到 v1 的安排/ }).click()
   await expect(page.getByText(/v3 · 生成于/)).toBeVisible()
   await expect(card.getByText(/已撤销 · v3/)).toBeVisible()
 })
@@ -375,10 +380,12 @@ test('a single day can be edited without regenerating the week', async ({ page }
 
   const dialog = page.getByRole('dialog')
   await expect(dialog.getByRole('heading', { name: label })).toBeVisible()
+  // 种子数据已有四周记录，首次生成可能正好是降载周，组数从 1 起步；
+  // 所以先加一组再断言，而不是假定初始值一定大于 1
   const sets = dialog.locator('.sets-stepper span').first()
   const before = Number((await sets.innerText()).replace(/\D/g, ''))
-  await dialog.getByRole('button', { name: /^减少/ }).first().click()
-  await expect(sets).toHaveText(`${before - 1} 组`)
+  await dialog.getByRole('button', { name: /^增加/ }).first().click()
+  await expect(sets).toHaveText(`${before + 1} 组`)
 
   // 保存只生成新版本，不重排整周
   await dialog.getByRole('button', { name: /保存为 v2/ }).click()
@@ -387,7 +394,7 @@ test('a single day can be edited without regenerating the week', async ({ page }
   // 重新打开同一天：改动已持久化
   await page.getByRole('button', { name: `${label}的安排` }).click()
   await expect(page.getByRole('dialog').locator('.sets-stepper span').first()).toHaveText(
-    `${before - 1} 组`,
+    `${before + 1} 组`,
   )
   await page.getByRole('dialog').getByRole('button', { name: '取消' }).click()
 

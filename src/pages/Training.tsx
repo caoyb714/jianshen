@@ -20,6 +20,7 @@ import {
   estimateMinutes,
   generatePlan,
   targetFor,
+  trainingWeekNumber,
   type EngineResult,
   type Suggestion,
 } from '../domain/engine'
@@ -41,7 +42,7 @@ function targetText(day: PlanDay) {
 }
 
 export default function Training() {
-  const { active, profile, commit, notify, today } = useProfile()
+  const { active, profile, data, cloud, commit, notify, today } = useProfile()
   const plan = active.plan
   const [draft, setDraft] = useState<Extract<EngineResult, { ok: true }> | null>(null)
   const [busy, setBusy] = useState(false)
@@ -50,21 +51,24 @@ export default function Training() {
   // 采纳只是进草稿：不进库、不改当前计划，卡底按钮才是唯一的提交入口
   const [staged, setStaged] = useState<string[]>([])
   const [ignored, setIgnored] = useState<string[]>([])
-  const [applied, setApplied] = useState<{ version: number; sigs: string[] } | null>(null)
   const [undone, setUndone] = useState<{ sig: string; version: number } | null>(null)
   const [pending, setPending] = useState<string | null>(null)
   // 单日编辑：只改这一天，保存时生成新版本，旧版归档
   const [editDay, setEditDay] = useState<PlanDay | null>(null)
   const [dayBusy, setDayBusy] = useState(false)
-  // 提交后规则可能不再给出同一条建议，卡片要留住刚生效的那几条，否则会瞬间消失
-  const [appliedItems, setAppliedItems] = useState<{
-    version: number
-    items: ReturnType<typeof reviewPlan>
-  } | null>(null)
-  // 撤销要回到「调整前」的基线重算，而不是做反向数学；基线只在本会话内保留
-  const [baseline, setBaseline] = useState<PlanDay[] | null>(null)
   const todayIndex = weekdayIndex(today)
   const todayPlan = plan?.days[todayIndex]
+
+  // 「已生效」不再只存在内存里：计划自己记着基线版本与已应用的条目，刷新后照样能显示与撤销
+  const appliedRows = plan?.appliedAdjustments ?? []
+  const baselineVersion = plan?.baselineVersion ?? null
+  const baseDays = useMemo(() => {
+    if (!plan || baselineVersion === null) return null
+    const row = data.plans.find(
+      (item) => item.profileId === plan.profileId && item.version === baselineVersion,
+    )
+    return row?.days ?? null
+  }, [plan, baselineVersion, data.plans])
 
   // 计划版本或日期变化后，旧理由与草稿都属于上一份安排，直接清空
   const planStamp = plan ? `${plan.id}:${plan.version}` : ''
@@ -73,11 +77,7 @@ export default function Training() {
     setStaged([])
     setIgnored([])
     setPending(null)
-    setBaseline(null)
-    // 刚提交成功的那一版要保留「已生效」，否则卡片会立刻退回未采纳态
-    setApplied((current) => (current && current.version === plan?.version ? current : null))
     setUndone((current) => (current && current.version === plan?.version ? current : null))
-    setAppliedItems((current) => (current && current.version === plan?.version ? current : null))
   }, [planStamp, today, plan?.version])
 
   const preview = useMemo(() => {
@@ -158,6 +158,7 @@ export default function Training() {
       confirmedAt: new Date().toISOString(),
       status: 'active',
       days,
+      editedBy: cloud ? cloud.viewerId : 'local',
       notes: [
         skip
           ? `周${WEEK_LABELS[nextDay.index]}改为休息。`
@@ -185,6 +186,31 @@ export default function Training() {
           : 'stop'
     return `${item.exerciseId}:${item.suggestion.kind}:${detail}`
   }
+
+  /**
+   * 卡片显示什么：先显示「已应用到这一版」的条目（来自计划本身，刷新后仍在），
+   * 再补上当前规则新给出的建议。这样提交后规则不再给同一条时，卡片不会整块消失。
+   */
+  const adjustRows = useMemo(() => {
+    const appliedViews = appliedRows.map((row) => ({
+      sig: row.sig,
+      name: row.name,
+      label: row.label,
+      reason: basis.texts[row.sig] ?? '已经应用到当前版本。',
+    }))
+    const extra = review
+      .filter((item) => !appliedRows.some((row) => row.sig === sigOf(item)))
+      .map((item) => {
+        const sig = sigOf(item)
+        return {
+          sig,
+          name: item.name,
+          label: adjustLabel(item.suggestion),
+          reason: basis.texts[sig] ?? item.suggestion.reason,
+        }
+      })
+    return [...appliedViews, ...extra]
+  }, [appliedRows, review, basis.texts])
 
   async function loadBasis() {
     if (!plan || !todayPlan || review.length === 0) return
@@ -230,57 +256,87 @@ export default function Training() {
     void loadBasis()
   }
 
+  const editedBy = cloud ? cloud.viewerId : 'local'
+
+  /** 把一组建议落到当前计划上，生成新版本，并记下基线与已应用条目 */
+  async function commitAdjustments(picked: ReturnType<typeof reviewPlan>) {
+    if (!plan || pending || picked.length === 0) return
+    const days = applyAdjustments(
+      plan.days,
+      picked.map(({ exerciseId, name, suggestion }) => ({ exerciseId, name, suggestion })),
+    )
+    const meta = picked.map((item) => ({
+      sig: sigOf(item),
+      name: item.name,
+      label: adjustLabel(item.suggestion),
+    }))
+    const next: TrainingPlan = {
+      ...plan,
+      id: crypto.randomUUID(),
+      version: plan.version + 1,
+      generatedAt: new Date().toISOString(),
+      confirmedAt: new Date().toISOString(),
+      status: 'active',
+      days,
+      // 第一次调整时定下基线；之后继续调整仍沿用最初那一版，撤销才能真正回到原点
+      baselineVersion: baselineVersion ?? plan.version,
+      appliedAdjustments: meta,
+      editedBy,
+      notes: [
+        '按最近记录调整：' + picked.map((item) => item.name).join('、'),
+        '旧版本已归档保留。',
+      ],
+    }
+    setPending('commit')
+    const saved = await commit({ kind: 'plan', value: next })
+    setPending(null)
+    if (!saved) return
+    setStaged([])
+    setUndone(null)
+    notify(`已生成 v${next.version}，旧版本已归档`)
+  }
+
   /**
-   * 提交一组调整，生成新版本。
-   * undo 时传的是「撤销的那条」，其余采纳项从基线重算，避免反向加减累积误差。
+   * 恢复到基线：拿基线那一版的 days，套用「剩下还要生效的条目」重算。
+   * 全程只依赖计划里存的 baselineVersion，所以刷新之后依然可用。
    */
-  async function submitAdjustments(sigs: string[], kind: 'commit' | 'undo', drop?: string) {
+  async function undoAdjustment(sig: string) {
     if (!plan || pending) return
-    const base = kind === 'undo' ? baseline : plan.days
-    if (!base) return
-    // 撤销时规则可能已经不再给出同一条，必须从提交时的快照里挑，而不是重新算
-    const source = kind === 'undo' ? (appliedItems?.items ?? []) : review
-    const remaining = sigs.filter((sig) => sig !== drop)
-    const picked = source.filter((item) => remaining.includes(sigOf(item)))
+    const base = baseDays
+    const kept = appliedRows.filter((row) => row.sig !== sig)
+    if (!base) {
+      notify('找不到这一版最初的计划，暂时无法恢复。')
+      return
+    }
+    // 基线版本上的建议是确定的：用同样的记录重算，得到与当初一致的结果
+    const baseReview = reviewPlan(base, active.workouts)
+    const picked = baseReview.filter((item) => kept.some((row) => row.sig === sigOf(item)))
     const days = picked.length
       ? applyAdjustments(
           base,
           picked.map(({ exerciseId, name, suggestion }) => ({ exerciseId, name, suggestion })),
         )
       : base
-    setPending(kind === 'undo' ? (drop ?? 'undo') : 'commit')
     const next: TrainingPlan = {
-      profileId: active.id,
+      ...plan,
       id: crypto.randomUUID(),
       version: plan.version + 1,
       generatedAt: new Date().toISOString(),
       confirmedAt: new Date().toISOString(),
       status: 'active',
-      input: plan.input,
       days,
-      notes: [
-        '按最近记录调整：' + picked.map((item) => item.name).join('、'),
-        '旧版本已归档保留。',
-      ],
+      baselineVersion,
+      appliedAdjustments: kept,
+      editedBy,
+      notes: [`已恢复到 v${baselineVersion} 的安排。`, '这次恢复同样生成了新版本，历史仍可回溯。'],
     }
+    setPending(sig)
     const saved = await commit({ kind: 'plan', value: next })
     setPending(null)
     if (!saved) return
-    if (kind === 'commit') {
-      setBaseline(plan.days)
-      setApplied({ version: next.version, sigs })
-      setAppliedItems({ version: next.version, items: picked })
-      setStaged([])
-      setUndone(null)
-      notify(`已生成 v${next.version}，旧版本已归档`)
-    } else {
-      setBaseline(base)
-      setApplied(remaining.length ? { version: next.version, sigs: remaining } : null)
-      setAppliedItems(picked.length ? { version: next.version, items: picked } : null)
-      setUndone({ sig: drop ?? '', version: next.version })
-      setStaged([])
-      notify(`已撤销，生成了 v${next.version}`)
-    }
+    setStaged([])
+    setUndone({ sig, version: next.version })
+    notify(`已恢复，生成了 v${next.version}`)
   }
 
   function generate() {
@@ -292,6 +348,8 @@ export default function Training() {
       equipment: profile.equipment,
       restrictions: profile.restrictions,
       restrictionsConfirmed: profile.restrictionsConfirmed,
+      // 第几周从真实训练记录算，避免「同一天重生成四次」被误判成降载周
+      weekNumber: trainingWeekNumber(active.workouts, today),
     })
     if (!result.ok) {
       notify(result.message)
@@ -390,7 +448,7 @@ export default function Training() {
       )}
 
       {/* 规则给幅度、AI 写理由：两块合成一张卡，避免同屏出现两份互相打架的建议 */}
-      {plan && !draft && (appliedItems?.items ?? review).length > 0 ? (
+      {plan && !draft && adjustRows.length > 0 ? (
         <section className="panel adjust-panel">
           <div className="section-heading">
             <h2>今天可以这样调</h2>
@@ -400,12 +458,11 @@ export default function Training() {
             依据最近两次训练记录。采纳只是先记下来，卡底生成新版本后才真正生效。
           </p>
           <ul className="slot-list">
-            {(appliedItems?.items ?? review).map((item) => {
-              const sig = sigOf(item)
-              const isApplied = applied?.sigs.includes(sig) ?? false
+            {adjustRows.map((row) => {
+              const sig = row.sig
+              const isApplied = appliedRows.some((applied) => applied.sig === sig)
               const isStaged = staged.includes(sig)
               const isIgnored = ignored.includes(sig)
-              const reason = basis.texts[sig] ?? item.suggestion.reason
               return (
                 <li
                   key={sig}
@@ -420,22 +477,25 @@ export default function Training() {
                     .join(' ')}
                 >
                   <div className="adjust-head">
-                    <h3>{item.name}</h3>
-                    <span className="adjust-chip">{adjustLabel(item.suggestion)}</span>
+                    <h3>{row.name}</h3>
+                    <span className="adjust-chip">{row.label}</span>
                   </div>
-                  {isIgnored ? null : <p className="adjust-reason">{reason}</p>}
+                  {isIgnored ? null : <p className="adjust-reason">{row.reason}</p>}
                   <div className="adjust-actions">
                     {isApplied ? (
                       <>
                         <span className="small-muted">
-                          已生效 · v{applied?.version}，撤销不会改回旧版
+                          已生效 · v{plan.version}
+                          {baselineVersion !== null ? ` · 基于 v${baselineVersion}` : ''}
                         </span>
                         <button
                           className="text-button"
                           aria-disabled={pending !== null}
-                          onClick={() => void submitAdjustments(applied?.sigs ?? [], 'undo', sig)}
+                          onClick={() => void undoAdjustment(sig)}
                         >
-                          {pending === sig ? `正在生成 v${plan.version + 1}…` : '撤销并生成新版本'}
+                          {pending === sig
+                            ? `正在生成 v${plan.version + 1}…`
+                            : `恢复到 v${baselineVersion ?? plan.version} 的安排`}
                         </button>
                       </>
                     ) : isStaged ? (
@@ -460,7 +520,7 @@ export default function Training() {
                       </>
                     ) : (
                       <>
-                        {undone?.sig === sig ? (
+                        {undone && undone.sig === sig ? (
                           <span className="small-muted">已撤销 · v{undone.version}</span>
                         ) : null}
                         <span className="adjust-spacer" />
@@ -491,7 +551,9 @@ export default function Training() {
             <button
               className="button secondary adjust-submit"
               aria-disabled={pending !== null}
-              onClick={() => void submitAdjustments(staged, 'commit')}
+              onClick={() =>
+                void commitAdjustments(review.filter((item) => staged.includes(sigOf(item))))
+              }
             >
               {pending === 'commit'
                 ? `正在生成 v${plan.version + 1}…`

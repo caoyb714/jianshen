@@ -122,7 +122,12 @@ export function CloudWorkspace({ client, account, viewerId, signOut, children }:
         keep(null)
         setError('当前账号无法访问此共享空间，请联系空间管理员。')
       } else if (failure instanceof CloudError && failure.kind === 'conflict') {
-        notify('记录已在另一处修改。请查看最新记录后再保存档案或数据。')
+        // 计划与记录的冲突后果不同：计划被覆盖会丢失一整天的安排，文案要分开
+        notify(
+          change.kind === 'plan'
+            ? '计划已在另一处更新（比如另一台设备改了同一天）。刷新后可以基于最新版本重试。'
+            : '记录已在另一处修改。请查看最新记录后再保存。',
+        )
         inFlight.current = null
         await refresh()
         setBusy(false)

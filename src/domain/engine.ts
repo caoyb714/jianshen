@@ -30,6 +30,11 @@ export type EngineInput = {
   equipment: Equipment[]
   restrictions: string
   restrictionsConfirmed: boolean
+  /**
+   * 当前是训练的第几周，从 1 开始。由调用方按真实训练历史算（见 trainingWeekNumber），
+   * 不能用「第几次重新生成」冒充，否则同一天重生成四次就会误判为降载周。
+   */
+  weekNumber?: number
 }
 
 export type EngineResult =
@@ -266,9 +271,35 @@ export function generatePlan(input: EngineInput): EngineResult {
     }
   })
 
+  // 每四周一次降载：组数减一、负荷降到九成。只作用于训练日，恢复与休息日不动。
+  const deload = isDeloadWeek(input.weekNumber ?? 0)
+  const plannedDays = deload
+    ? trainingDays.map((day) =>
+        day.kind === '训练'
+          ? {
+              ...day,
+              slots: day.slots.map((slot) => ({
+                ...slot,
+                sets: Math.max(1, slot.sets - 1),
+                startLoad: Math.round(slot.startLoad * 0.9 * 10) / 10,
+              })),
+              estimatedMinutes: estimateMinutes(
+                day.slots.map((slot) => ({ ...slot, sets: Math.max(1, slot.sets - 1) })),
+                warmupSeconds,
+              ),
+            }
+          : day,
+      )
+    : trainingDays
+  if (deload) {
+    notes.push(
+      `这是训练的第 ${input.weekNumber} 周，按计划降载：组数减一、负荷降到九成，下周恢复原强度。`,
+    )
+  }
+
   const trainingIndexes = new Set(schedule)
   const days: PlanDay[] = Array.from({ length: 7 }, (_, index) => {
-    const training = trainingDays.find((day) => day.index === index)
+    const training = plannedDays.find((day) => day.index === index)
     if (training) return training
     if (input.weeklyDays >= 5 && index === 3) {
       const recover = candidatesFor(input, '灵活', conservative).slice(0, 2)
@@ -420,6 +451,21 @@ export function suggest(session: SuggestInput): Suggestion {
 /** 每 4 周安排一周降载：组数减一，负荷降 10% */
 export function isDeloadWeek(weekNumber: number): boolean {
   return weekNumber > 0 && weekNumber % 4 === 0
+}
+
+/**
+ * 训练周序号：从最早一条训练记录起按 7 天一档，第一周记 1。
+ *
+ * 为什么不用「第几次生成计划」：同一天重生成四次会被误判成第四周而降载。
+ * 没有训练记录时返回 0，表示还没有「周」的概念，不降载。
+ */
+export function trainingWeekNumber(workouts: Array<{ date: string }>, today: string): number {
+  if (workouts.length === 0) return 0
+  const first = workouts.reduce((min, row) => (row.date < min ? row.date : min), workouts[0].date)
+  const start = new Date(`${first}T12:00:00`).getTime()
+  const now = new Date(`${today}T12:00:00`).getTime()
+  if (!Number.isFinite(start) || !Number.isFinite(now) || now < start) return 0
+  return Math.floor((now - start) / (7 * 86400000)) + 1
 }
 
 export type MuscleVolume = Partial<Record<Muscle, number>>

@@ -124,6 +124,13 @@ export const planInputSchema = z.object({
   restrictions: z.string().max(500),
 })
 
+/** 已应用到这一版的建议，用于刷新后仍能显示「已生效」并撤销 */
+export const appliedAdjustmentSchema = z.object({
+  sig: z.string().max(80),
+  name: z.string().max(30),
+  label: z.string().max(16),
+})
+
 export const trainingPlanSchema = z.object({
   profileId: z.string(),
   id: uuid,
@@ -134,6 +141,12 @@ export const trainingPlanSchema = z.object({
   input: planInputSchema,
   days: z.array(planDaySchema).length(7),
   notes: z.array(z.string().max(300)).max(10),
+  // 以下三个字段是可选的：旧计划没有它们，读取时必须照常通过
+  /** 这次调整基于哪一版；撤销回到它重算，刷新后仍然可用 */
+  baselineVersion: z.number().int().min(0).nullable().optional(),
+  appliedAdjustments: z.array(appliedAdjustmentSchema).max(12).optional(),
+  /** 谁改的：云端存 viewerId，本机存 local */
+  editedBy: z.string().max(40).nullable().optional(),
 })
 
 export const profileSlotSchema = z.object({
