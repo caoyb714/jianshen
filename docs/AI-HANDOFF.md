@@ -1,119 +1,415 @@
-# HerFit 测试交接说明
+# HerFit 完整交接文档
 
-> 给接手继续测试的 AI。最后更新 2026-11-18，对应提交 `e4f4961`。
-> 先读这一页，再按需翻 `ARCHITECTURE.md`、`TEST_PLAN.md`、`OPTIMIZATION.md`。
+> 读者：接手这个项目的下一个 AI 或开发者。
+> 最后更新：2026-11-18，对应提交 `e1e7959`（用 `git log --oneline -1` 可确认最新）。
+> 读完这份就能独立跑起来、看懂代码、知道哪些做完了、哪些没做、下一步做什么。
 
-## 1. 这是什么
+---
 
-两人私用的健康 PWA，中文，线上 https://herfit-ec6.pages.dev。React 19 + TS + Vite，Cloudflare Pages + Functions，数据在 Supabase（云模式）或 localStorage（演示模式），二者共用同一套 Store 接口。
+## 0. 两条阅读路径
 
-**产品红线**（测试时要当断言看，不是文案）：
+- **只想知道怎么跑和现状**：读第 1、2、3 节，然后 `npm run check && npm test`。
+- **要动代码或补测试**：读完 4–9 节，务必看第 10（缺口）和第 12（禁令）。
+
+---
+
+## 1. 产品是什么
+
+两个人（通常是伴侣或家人）共用的健康 PWA。不是健身社区，不是减脂工具，没有排行榜、没有打卡惩罚、没有体重目标。
+
+**它想解决的事**：把「今天该练什么、上次练得怎么样、要不要加量」说清楚，并让两个人都看到同一份记录。
+
+**五条红线**（写测试时当断言看）：
 
 1. 不以减重为目标：没有体重目标、没有热量、没有「应该瘦到多少」。
-2. 不做体重排名或比较，体重不计入任何评分。
+2. 体重不做比较、不排名、不计入任何评分。
 3. 不做打卡惩罚、不制造断签焦虑。
-4. 动作未经专业审核，界面不能出现「已审核」「专业处方」。
-5. AI 不产生数字、不诊断、不直接改计划。
+4. 动作内容未经专业审核，界面不得出现「已审核」「专业处方」。
+5. AI 不产生数字、不做诊断、不直接改计划。
 
-## 2. 现在能跑通什么
+---
 
-| 能力                                                     | 状态                 |
-| -------------------------------------------------------- | -------------------- |
-| 双档案（A/B 位）共享一份空间，各自有档案、计划、记录     | 可用                 |
-| 规则引擎生成周计划，计划不可变、每次生成新版本、旧版归档 | 可用                 |
-| AI 逐条理由（幅度由规则算，AI 只写为什么）               | 可用（服务端已实现） |
-| 采纳建议进草稿，卡底确认才生成新版本；撤销从基线重算     | 可用                 |
-| 周计划单日编辑（改组数 / 换替代动作 / 整天改休息）       | 可用                 |
-| 体重单源记录（记录页写、我的页只读、开关默认可见）       | 可用                 |
-| 训练记录逐条删除（仅作者，行内二次确认）                 | 可用                 |
-| 云端计划写入乐观锁（陈旧版本硬拒 40001）                 | 可用                 |
+## 2. 现在是什么状态
+
+| 项           | 值                                                                                      |
+| ------------ | --------------------------------------------------------------------------------------- |
+| 线上地址     | https://herfit-ec6.pages.dev                                                            |
+| 技术栈       | React 19 + TypeScript + Vite；Cloudflare Pages + Functions；Supabase（Postgres + Auth） |
+| 运行模式     | 云模式（线上）/ 演示模式（本机 localStorage），共用一套 Store 接口                      |
+| 单测         | 92 项，6 个文件                                                                         |
+| 演示 E2E     | 40 项（桌面 + 移动双视口，实际执行 80 次）                                              |
+| 云端 E2E     | 4 项（PGlite 起真实 schema）                                                            |
+| 最近一次全绿 | 2026-11-18 22:49                                                                        |
+
+**已完成的能力**
+
+| 能力               | 关键实现                                                         |
+| ------------------ | ---------------------------------------------------------------- |
+| 双档案共享一份空间 | `profiles` 为 1–2 个槽位，各自有档案、计划、记录                 |
+| 规则生成周计划     | `generatePlan()`，7 天，含热身与降载                             |
+| 计划不可变         | 每次改动生成新 `TrainingPlan`，版本 +1，旧版 `status='archived'` |
+| AI 逐条理由        | 幅度由规则算，AI 只写「为什么」，数字必须来自实测                |
+| 采纳进草稿         | 点采纳只改本地 `staged`，卡底才提交                              |
+| 撤销从基线重算     | 不做反向加减，避免累积误差                                       |
+| 单日编辑           | 改组数 / 换替代动作 / 整天改休息，只动那一天                     |
+| 体重单源           | 只存 `metrics[].weight`；记录页写、我的页只读、开关默认可见      |
+| 训练记录删除       | 仅作者可删，行内二次确认，云端 RPC 校验                          |
+| 计划写入乐观锁     | `herfit_write_plan`，陈旧版本返回 40001                          |
+
+**明确没做的**：AI 触发策略（10.1）、撤销跨刷新（10.2）、多端并发 E2E（10.3）、无障碍自动化（10.5）、iOS 实测（10.6）。
+
+---
 
 ## 3. 怎么跑
 
+### 3.1 命令
+
 ```bash
-npm run check          # tsc -b，类型
-npm test               # vitest，92 项
-npm run test:e2e       # Playwright，演示模式 40 项
-HERFIT_TEST_CLOUD=1 npm run test:e2e   # 云端模式 4 项（用 PGlite 起真实 schema）
-npm run dev            # 本机开发
-npm run deploy         # 构建 + 发布到 Pages
-npm run verify:cloud   # 线上结构与 4 个 RPC 自检
+npm ci                 # 安装依赖
+npm run check          # tsc -b，改完必跑
+npm test               # vitest，92 项，约 3 秒
+npm run test:e2e       # Playwright 演示模式，40 项，约 40 秒
+HERFIT_TEST_CLOUD=1 npm run test:e2e   # 云端模式 4 项，约 25 秒
+npm run dev            # http://127.0.0.1:5173
+npm run verify:cloud   # 线上 8 张表 + 4 个 RPC 自检
+npm run deploy         # 构建并发布到 Cloudflare Pages
 ```
 
-**必须先确认 Playwright 浏览器可用**。若报找不到浏览器，用仓库内的缓存路径：
+Playwright 浏览器若报缺失，用仓库内缓存：
 
 ```bash
 PLAYWRIGHT_BROWSERS_PATH=.cache/playwright-browsers npm run test:e2e
 ```
 
-## 4. 代码地图
+### 3.2 密钥与账号（都不在仓库里）
 
-| 位置                       | 职责                                                                      |
-| -------------------------- | ------------------------------------------------------------------------- |
-| `src/domain/engine.ts`     | 计划生成、`suggest()` 渐进负荷、`applyAdjustments()`、`estimateMinutes()` |
-| `src/domain/stats.ts`      | `reviewPlan()`、`latestWeights()`、周统计                                 |
-| `src/domain/model.ts`      | 所有 Zod schema，**改动这里最容易炸**                                     |
-| `src/domain/ai.ts`         | `buildBasisPayload()`（隐私白名单）、`formatTarget()`                     |
-| `functions/api/explain.ts` | DeepSeek 代理：白名单校验、数字校验、限流、超时                           |
-| `src/pages/Training.tsx`   | 建议卡四态、单日编辑、计划生成与提交                                      |
-| `src/pages/Records.tsx`    | 体重块、腰围臀围、睡眠、饮水、训练记录删除                                |
-| `src/cloud/repository.ts`  | 云端读写；plan 走 `herfit_write_plan`                                     |
-| `supabase/migrations/`     | 建表、RLS、RPC、乐观锁                                                    |
+| 东西                                      | 位置                                         |
+| ----------------------------------------- | -------------------------------------------- |
+| Supabase service role key                 | `.env.setup.local`（本机，永久令牌）         |
+| 线上账号 `herfit.a@` / `herfit.b@` 的密码 | 根目录 `账号密码.local`                      |
+| DeepSeek Key                              | Cloudflare Pages 环境变量 `DEEPSEEK_API_KEY` |
 
-## 5. 已有测试覆盖
+`npm run provision` 建账号与空间；`npm run deploy` 读 `.env.local` 里的 Cloudflare 凭据。
 
-**单测 92 项**：`engine` 37（渐进负荷与安全边界）、`domain` 23（派生统计、体重）、`basis` 15（条目化接口：白名单、数字校验、截断、坏 JSON、405、缺 Key、4KB、限流、上游错误不泄漏、超时、重复签名、超 6 条）、`cloud-db` 10（PGlite 真实 schema：RLS、两档案、计划唯一、乐观锁 40001、删除仅作者）、`ai` 5（载荷白名单封闭集合、控制字符、6 条上限）、`cloud-config` 2（配置缺失时报错清晰）。
+### 3.3 常见失败
 
-**演示 E2E 40 项**：五路由无溢出、计划生成、逐组打卡、完整训练判定、删除确认、体重块三态与同天覆盖保腰围、档案限制确认、跨天饮水、中断恢复、丢弃草稿、休息时长、周报、建议卡草稿→提交 v2→撤销 v3、单日编辑不重排整周。
+| 现象                                                     | 原因                                             |
+| -------------------------------------------------------- | ------------------------------------------------ |
+| `page.evaluate` 报 `Cannot read properties of undefined` | 本地数据被 schema 拒绝并回落 seed（见 12.1）     |
+| 演示 E2E 里 `/api/explain` 404                           | 正常，本地没有 Pages Functions，这正是测降级路径 |
+| 云端 E2E 连不上                                          | 忘了 `HERFIT_TEST_CLOUD=1`，或 PGlite 缓存未生成 |
+| 手机上看到的还是旧版                                     | PWA 缓存，下拉刷新                               |
 
-**云端 E2E 4 项**：两名成员共享记录、失败表单不丢输入、仅作者可删、越权被拒。
+---
 
-## 6. 没有覆盖的地方（接手后优先补这些）
+## 4. 架构
 
-按风险从高到低，**前两条是功能缺口，不是测试缺口**：
+### 4.1 三种数据形态
 
-1. **AI 触发策略没有实现。** 计划里写的是「每版本每天自动 1 次、手动 ≤4 次、第 5 次进入 30 秒倒计时」，实际只做了手动「生成理由」按钮，点一次请求一次，没有自动触发、没有次数上限、没有倒计时。服务端仍有每 IP 每分钟 5 次限流兜底。要补的话先补客户端计数，再加测试。
-2. **撤销只在当前会话有效。** 撤销依赖内存里的 `baseline`（调整前的 days），刷新页面后「已生效」状态丢失，条目回到未采纳。需要产品决定：接受，还是把基线随版本落到库里。
-3. **多端并发冲突没有 E2E。** 只有 SQL 层的 40001 断言。真正的双标签页同改一天、后提交被拒并提示刷新，没有自动化。
-4. **成长页在开关关闭时的表现没有断言。** 记录页的壳有断言（无数字、有标题），成长页的 tab / 表格列 / 曲线回落只有单测层面的分支存在。
-5. **无障碍只做了零散断言。** `aria-live` 播报（体重已记录、已采纳、理由不可用）没有自动验证；44px 热区、焦点顺序、`prefers-reduced-motion` 都没有。
-6. **真实 DeepSeek 没有端到端。** 线上无 Key 时走降级，有 Key 时的真实返回质量（是否守住 40 字、是否复述数字）只能人工抽查。
-7. **iOS / Safari 未测。** PWA 安装、safe-area、`scrollIntoView` 在 iOS 上的行为都只在 Chromium 验证过。
-
-## 7. 写测试时会踩的坑
-
-1. **训练记录的 schema 很严。** `performanceSchema` 要求 `exerciseId / name / role / plannedSets / targetReps / targetSeconds / replacedFrom / sets` 八个字段齐全。少一个，整份本地数据会被 `dataSchema` 拒绝并回落到 seed，表现是「测试莫名其妙回到了初始状态」。造数据请照抄 `tests/app.spec.ts` 里「adopting a suggestion」那段。
-2. **本地存储键是 `herfit.demo.v2`，计划字段叫 `plans` 不是 `training_plans`。**
-3. **`profiles` 是槽位包装**：`{ id, slot, profile }`，`profile` 可能为 null。
-4. **周计划格子已从 `div` 改成 `button`**，带 `aria-label="编辑周X的安排"`。断言不要再找 `div`。
-5. **演示模式下 `/api/explain` 必然 404**（没有 Pages Functions），这是测降级路径的预期，不是环境坏了。
-6. **同意弹窗的确认按钮文案是「同意并生成」**，标题是「把数据发送给 DeepSeek 生成理由」。
-7. **体重开关默认 `true`**，第一次点击是关闭。体重块的输入标签是「今天的体重（kg）」，动作按钮是「记录体重」/「更新今天的体重」。
-
-## 8. 加一个测试的最小模板
-
-```ts
-test('...', async ({ page }) => {
-  await ensurePlan(page) // 每周 7 天 + 生成并确认计划
-  const dayButton = page.locator('.week-plan > button').filter({ hasText: '分' }).first()
-  await dayButton.click() // 打开单日编辑
-  const dialog = page.getByRole('dialog')
-  // ...操作
-})
+```
+演示模式：页面 → Store → localStorage('herfit.demo.v2') + Zod 校验
+云模式：  页面 → Store → CloudWorkspace → rpc('herfit_snapshot' / 'herfit_write' / 'herfit_write_plan' / 'herfit_delete_workout')
+                                      └→ 实时订阅，B 端改动会推到 A 端
 ```
 
-`ensurePlan` / `startSession` 在 `tests/app.spec.ts` 顶部。需要造历史记录时，用 `page.evaluate` 直接改 localStorage，再 `page.goto('/training')` 重新加载。
+页面不直接碰存储，只调 `commit({ kind, value })`。`kind` 七种：`profile / habit / metric / workout / plan / settings / deleteWorkout`。
 
-## 9. 绝对不要做
+### 4.2 一次写入发生了什么
 
-- **不要给档案加体重字段**（`profile.weight`）。体重只有一个来源：`metrics[].weight`。加第二个来源必然出现两个数字。
-- **不要给 `dataSchema / profileSchema / settings` 加必填键**。旧数据会解析失败，`loadData` 只能回落到 seed，等于静默清空。
-- **不要用原生 `disabled` 表示「进行中」**。它会把键盘焦点弹回页面根部，用 `aria-disabled` + 处理函数锁。
-- **不要把版本号写成字面量**。所有 `v{n}` 必须用 `plan.version` 插值，否则从 v15 起每次失败提示都在说谎。
-- **不要让 AI 产生数字**。幅度只来自 `adjustLabel()`，AI 的文本要过数字子集校验。
+```
+commit(change)
+  → CloudWorkspace.save(current, change)
+      → plan:   rpc herfit_write_plan(workspace, profile, payload, expectedVersion)
+      → 其他:   rpc herfit_write(workspace, profile, kind, payload, expectedRevision)
+      → 成功返回整份新快照，直接替换本地状态
+      → 失败抛错 → Store 返回 false → 页面保留输入并提示，绝不乐观更新
+```
 
-## 10. 账号与密钥
+### 4.3 路由
 
-- 线上两个账号：`herfit.a@` 与 `herfit.b@`，密码在仓库根目录的 `账号密码.local`（**不要把内容写进任何提交或文档**）。
-- Supabase service role key 在 `.env.setup.local`（永久令牌，仅本机）。
-- DeepSeek Key 配在 Cloudflare Pages 的环境变量 `DEEPSEEK_API_KEY`，不落仓库。
+| 路径                      | 页面      | 说明                                         |
+| ------------------------- | --------- | -------------------------------------------- |
+| `/`                       | Home      | 今日概览、饮水、连续完成                     |
+| `/training`               | Training  | 建议卡、周计划、单日编辑、计划生成           |
+| `/training/session/:date` | Workout   | 逐组打卡，中断可恢复                         |
+| `/exercises`              | Exercises | 44 个动作，含替代动作与注意事项              |
+| `/records`                | Records   | 体重块、腰围臀围、睡眠、饮水、训练记录与删除 |
+| `/growth`                 | Growth    | 周统计、身体变化曲线、数据表                 |
+| `/me`                     | Me        | 档案、体重开关、AI 同意、导出、清空          |
+
+---
+
+## 5. 数据模型
+
+### 5.1 前端根结构（`src/domain/model.ts`）
+
+```ts
+dataSchema = {
+  version: 2,                 // 字面量，不匹配即拒绝
+  profiles: 1..2 个 { id, slot, profile | null },
+  habits: Habit[],            // 按 date 唯一，睡眠/饮水
+  metrics: Metric[],          // 按 date 唯一，weight/waist/hip 各可空
+  workouts: Workout[],        // 训练记录，含逐组 reps/load/done
+  plans: TrainingPlan[],      // 至多一条 status='active'
+  settings: { showWeight: boolean }
+}
+```
+
+档案字段：昵称、年龄 18–100、身高 100–230、经验三档、日常活动三档、目标三档、每周 1–7 天、单次 10–90 分钟、器械（徒手/哑铃/弹力带至少一项）、哑铃重量、弹力带档位、身体限制 ≤500 字、限制确认布尔。
+
+**没有体重字段，这是刻意的。**
+
+`metricSchema`：`weight` 20–400 可空、`waist/hip` 30–250 可空，三项至少一项非空。
+
+`workoutSchema` 每个动作必须八字段齐全：`exerciseId / name / role / plannedSets / targetReps / targetSeconds / replacedFrom / sets`。少一个会让整份本地数据被拒并回落 seed（见 12.1）。
+
+### 5.2 数据库
+
+8 张表：`workspaces / workspace_members / health_profiles / habit_logs / body_metrics / workout_logs / app_settings / training_plans`。
+
+- 全部开 RLS，读写限定 `workspace_members` 成员。
+- `training_plans` 唯一索引 `training_plans_one_active`：每个档案同时只能一条 `active`。
+- `body_metrics` 主键 `(workspace_id, profile_id, observed_on)`：同一天只有一行。
+- `app_settings` 按 `(workspace_id, user_id)` 存，带 `revision` 做乐观锁。
+
+### 5.3 RPC 契约
+
+| 函数                         | 参数                                         | 行为                                        |
+| ---------------------------- | -------------------------------------------- | ------------------------------------------- |
+| `herfit_snapshot()`          | —                                            | 返回调用者所在空间全部数据                  |
+| `herfit_write(...)`          | workspace, profile, kind, payload, expected  | 六种记录统一写入，`expected` 不匹配抛 40001 |
+| `herfit_write_plan(...)`     | workspace, profile, payload, expectedVersion | 计划专用，按 `payload->>'version'` 比对     |
+| `herfit_delete_workout(...)` | workspace, profile, record                   | 仅作者可删，非作者抛 42501                  |
+
+错误码：`42501` 权限、`23514` 字段非法、`40001` 版本冲突。前端把 40001 映射成「计划已更新，需要刷新」。
+
+---
+
+## 6. 领域规则
+
+### 6.1 计划生成
+
+`generatePlan({ age, experience, weeklyDays, sessionMinutes, equipment, restrictions, restrictionsConfirmed })`：
+
+1. 限制未确认 → 返回 `{ ok: false, message }`，不生成。
+2. 按每周天数分配训练日与恢复/休息日。
+3. 每天按动作模式覆盖（蹲 / 髋铰链 / 推 / 拉 / 核心）挑动作，控制总时长。
+4. 输出 7 天，含热身、槽位、预计时长、备注。
+
+> 注意：`isDeloadWeek()` 已经写好并导出（每 4 周降载），但**生成器目前没有调用它**，也就是说计划里不会自动出现降载周。这属于预留能力，不是已完成功能。
+
+### 6.2 渐进负荷 `suggest()`
+
+判定顺序**不可调换**，测试依赖它：
+
+| 顺序 | 条件                             | 结果                                                |
+| ---- | -------------------------------- | --------------------------------------------------- |
+| 1    | 历史里有 `discomfort`            | `stop`（暂停，给替代动作）                          |
+| 2    | 可用记录 < 2 次                  | `collect`（先攒数据）                               |
+| 3    | 上次难度 ≥ 9                     | `reduce`（负荷 ×0.95）                              |
+| 4    | 连续两次全部达标 且 两次难度 ≤ 7 | `increase`（哑铃 +1kg / 弹力带 +1 档 / 徒手 +2 次） |
+| 5    | 上次有组未达标                   | `hold`（保持，先做完整）                            |
+| 6    | 其他                             | `hold`（进展正常）                                  |
+
+幅度常量 `LOAD_STEP_KG = 1`。**AI 不能改这个数字**，只能解释。
+
+### 6.3 体重口径
+
+- 唯一来源 `metrics[].weight`。
+- 当前值 = 按日期倒序最近一条 ≥20 的非空值；`0` 与 `null` 不算。
+- 变化 = 与上一条非空的差，只做中性描述（「比上次少 0.2 kg」），不用箭头、不用红绿。
+- 同天再保存 = 覆盖同一行，且必须把已有腰围/臀围带回去（整行覆盖的坑）。
+
+### 6.4 AI 边界
+
+- 输入白名单：年龄、经验、器械、限制（压平控制字符、截 80 字）、当天动作、每条建议的幅度与最近一次实测（次数/负荷/难度）、近 7 天三个汇总数。**不含昵称、邮箱、id、时间戳、体重。**
+- 输出契约：`{ ok: true, items: [{ sig, text }] }`，`text` ≤40 字。
+- 服务端逐条校验：sig 必须在请求白名单内；文本里的数字必须属于该条实测值或幅度文案；否则整条丢弃。
+- 模型没按 JSON 输出 → 返回空数组，界面只少「理由」一行，幅度与采纳不受影响。
+
+---
+
+## 7. 关键交互的状态机
+
+### 7.1 建议卡四态
+
+| 态                | 触发         | 状态行                          | 操作                       |
+| ----------------- | ------------ | ------------------------------- | -------------------------- |
+| S0 未采纳         | 初始         | 无                              | 采纳 / 忽略                |
+| S1 已采纳（草稿） | 点采纳       | 已采纳 · 下次生成计划时应用     | 移出本次调整（不产生版本） |
+| S2 已生效         | 卡底提交成功 | 已生效 · v{n}，撤销不会改回旧版 | 撤销并生成新版本           |
+| S3 已撤销         | 撤销成功     | 已撤销 · v{n}                   | 采纳（等同 S0，进草稿）    |
+
+**卡底按钮是唯一提交入口**：「按 N 条建议生成新版本」，草稿 0 条时不渲染。S3 的采纳不得绕过它。
+
+### 7.2 体重块三态
+
+| 态             | 表现                                                                             |
+| -------------- | -------------------------------------------------------------------------------- |
+| 开关开、有记录 | 主值 + 变化行（日期只出现一次）+ 「更新今天的体重」+ 免责                        |
+| 开关开、无记录 | `—` + 「还没有记录过体重。」+ 「记录体重」                                       |
+| 开关关         | 标题「体重」+「体重记录已隐藏」+「在设置里打开」；**壳内不得出现任何数字或日期** |
+
+### 7.3 删除训练记录
+
+行内「删除这条记录」→「确认删除 / 取消」→ 调 `herfit_delete_workout`。不用 Modal，避免焦点陷阱。
+
+### 7.4 单日编辑
+
+周计划七个格子是 `button`（`aria-label="编辑周X的安排"`）。可改组数（1–10）、换替代动作（目标按新动作重算、负荷归零）、整天改休息。保存只替换该天，版本 +1。
+
+---
+
+## 8. 代码地图
+
+| 文件                       | 职责                                  | 改动注意点                                            |
+| -------------------------- | ------------------------------------- | ----------------------------------------------------- |
+| `src/domain/model.ts`      | 所有 schema                           | 加字段等于改数据契约，旧数据会解析失败                |
+| `src/domain/engine.ts`     | 生成、渐进负荷、应用调整、时长估算    | 纯函数，改动必须补 `engine.test.ts`                   |
+| `src/domain/stats.ts`      | 周统计、`reviewPlan`、`latestWeights` | `reviewPlan` 只返回 increase/reduce/stop              |
+| `src/domain/ai.ts`         | 载荷构造、`formatTarget`              | 隐私边界，新增字段要同步 `ai.test.ts` 的封闭集合断言  |
+| `src/domain/change.ts`     | 变更类型与本地应用                    | 本地与云端两条路径都要照顾                            |
+| `src/app/Store.tsx`        | 状态、`commit`、`notify`、`busy`      | 失败必须返回 false                                    |
+| `src/app/explain.ts`       | `requestBasis`，18 秒超时             | 任何异常收敛成 `{ ok: false }`                        |
+| `src/cloud/repository.ts`  | 云端读写与错误码映射                  | plan 走 `herfit_write_plan`，别退回 `herfit_write`    |
+| `src/pages/Training.tsx`   | 建议卡、单日编辑                      | 状态最多，改完必须跑 E2E                              |
+| `src/pages/Records.tsx`    | 体重块与其他记录                      | 体重与腰围共用一行 metric                             |
+| `functions/api/explain.ts` | DeepSeek 代理                         | 白名单、数字校验、4KB、限流、12 秒超时都在这里        |
+| `supabase/migrations/`     | 表、RLS、RPC                          | 新增迁移要同步 `scripts/verify-cloud.mjs` 的 RPC 清单 |
+
+---
+
+## 9. 测试体系
+
+| 文件                         | 数量 | 覆盖                                                                                                         |
+| ---------------------------- | ---- | ------------------------------------------------------------------------------------------------------------ |
+| `tests/engine.test.ts`       | 37   | 生成、渐进负荷六分支、安全边界、降载                                                                         |
+| `tests/domain.test.ts`       | 23   | 派生统计、体重取值、周报                                                                                     |
+| `tests/basis.test.ts`        | 15   | 条目化接口：白名单、数字校验、截断、坏 JSON、405、缺 Key、4KB、限流、上游错误不泄漏、超时、重复签名、超 6 条 |
+| `tests/cloud-db.test.ts`     | 10   | PGlite 真实 schema：RLS、两档案、计划唯一、乐观锁、删除鉴权                                                  |
+| `tests/ai.test.ts`           | 5    | 载荷封闭集合、控制字符、6 条上限、近 7 天统计                                                                |
+| `tests/cloud-config.test.ts` | 2    | 配置缺失时的报错                                                                                             |
+| `tests/app.spec.ts`          | 40   | 全流程 UI，桌面 + 移动                                                                                       |
+| `tests/cloud.spec.ts`        | 4    | 双人共享、失败保留输入、仅作者可删                                                                           |
+
+### 9.1 造数据模板
+
+```ts
+await ensurePlan(page) // 每周 7 天 + 生成并确认计划
+const day = page.locator('.week-plan > button').filter({ hasText: '分' }).first()
+await day.click() // 打开单日编辑
+```
+
+需要历史训练记录时，用 `page.evaluate` 直接改 `localStorage['herfit.demo.v2']`，动作对象必须八字段齐全（照抄 `tests/app.spec.ts` 里「adopting a suggestion」那段）。
+
+---
+
+## 10. 已知缺口
+
+### 10.1 P0 · AI 触发策略未实现（功能缺口）
+
+**计划要求**：本地条目秒出；AI 理由仅在「已同意 + 在线 + 有可执行建议 + 该版本当天未拉过」时延迟 800ms 自动拉一次；每版本每天自动 1 次、手动 ≤4 次；第 5 次按钮变「稍后再试（30 秒）」倒计时。
+
+**实际**：只有手动「生成理由」按钮，点一次请求一次。没有自动触发、没有客户端计数、没有倒计时。服务端仍有每 IP 每分钟 5 次限流兜底。
+
+**影响**：成本与体验不可控；离线时用户能反复点。
+
+### 10.2 P0 · 撤销只在当前会话有效
+
+撤销依赖内存里的 `baseline`（调整前的 days）。刷新后「已生效」状态丢失、条目回到未采纳，但库里已经是 v2。
+
+**两个选项**：接受（简单，但重开页面会困惑）；或把 `baselineVersion` 随计划 payload 存下，撤销时从 archived 版本取 days 重算（改动集中在 `Training.tsx` 与 `valid_payload` 的 plan 分支）。
+
+### 10.3 P1 · 多端并发没有 E2E
+
+只有 SQL 层断言 40001。真实两个标签页同改一天、后提交被拒并提示刷新的交互没自动化，用两个 `browser.context()` 可覆盖。
+
+### 10.4 P1 · 成长页在开关关闭时没断言
+
+记录页的壳有断言（无数字、有标题），成长页的 tab / 表格列 / 曲线回落只有代码分支，没有测试。
+
+### 10.5 P2 · 无障碍只做了零散断言
+
+`aria-live` 播报、44px 热区、焦点顺序、`prefers-reduced-motion` 都没自动验证。
+
+### 10.6 P2 · 真实 DeepSeek 与 iOS 未验证
+
+配 Key 后的真实返回质量（是否守住 40 字、是否复述数字）只能人工抽查；iOS 的 PWA 安装、safe-area、`scrollIntoView` 未测。
+
+### 10.7 P2 · 降载周未接入生成器
+
+`isDeloadWeek()` 已实现并导出，但 `generatePlan()` 没有调用它。要启用需在生成时按「连续训练周数」决定是否降载，并补对应单测。目前用户只能靠单日编辑手动减组。
+
+---
+
+## 11. 下一步计划
+
+### P0-1 补齐 AI 触发策略
+
+- 新增 `src/app/aiBasis.ts`：按 `planStamp + date` 记录「今日是否已自动拉过、手动次数、冷却截止」，存 localStorage。
+- `Training.tsx` 接入：进页面 800ms 后满足条件自动拉一次；手动按钮复用同一函数；第 5 次进入 30 秒倒计时；`AbortController` + 返回后复检 `planStamp`。
+- 验收：离线不发请求；自动只发生一次；第 5 次按钮禁用并倒计时；失败只降级理由位；刷新后计数仍在。
+- 影响：`aiBasis.ts`（新）、`Training.tsx`、`tests/basis.test.ts`、`tests/app.spec.ts`。
+
+### P0-2 撤销跨刷新
+
+- 计划 payload 增加 `baselineVersion`；撤销时从 `plans` 找该版本取 days，套用剩余调整重算。
+- 验收：提交 v2 后刷新，「已生效 · v2」仍在；撤销仍生成 v3 且内容等于 v1 基线 + 剩余项。
+- 影响：`model.ts`（**只能是可选字段**）、`Training.tsx`、`valid_payload` 的 plan 分支、E2E。
+
+### P1-1 多端并发 E2E
+
+- 两个 context 同账号登录，A 改一天保存，B 用旧版本提交，断言 40001 提示与刷新后数据。影响 `tests/cloud.spec.ts`。
+
+### P1-2 成长页隐藏态
+
+- 补 E2E：关开关后成长页无体重 tab / 列 / 曲线，记录页壳无数字，重开后数据仍在。
+
+### P1-3 无障碍
+
+- `aria-live` 三处（体重已记录、已采纳、理由不可用）用文本断言；键盘完成采纳；删除确认 Esc 返回；检查热区尺寸。
+
+### P2 手测清单
+
+- iOS Safari：安装到主屏、滚动到 `#showWeight`、safe-area 下的底部按钮。
+- 真实 Key：连续 10 次生成，检查是否越界给数字、是否出现医疗建议。
+
+---
+
+## 12. 禁令与陷阱
+
+1. **不要加 `profile.weight`**。体重只有 `metrics[].weight` 一个来源。
+2. **不要给 `dataSchema / profileSchema / settings` 加必填键**。旧数据会解析失败并回落 seed，等于静默清空。要加就加可选字段 + 默认值。
+3. **不要用原生 `disabled` 表示「进行中」**。它会把焦点弹回 body，用 `aria-disabled` + 处理函数里的 in-flight 锁。
+4. **不要把版本号写死**。所有 `v{n}` 用 `plan.version` 插值。
+5. **不要让 AI 产生数字**。幅度只来自 `adjustLabel()`，理由里的数字要过子集校验。
+6. **不要乐观更新云端写入**。失败必须保留输入并提示。
+7. **不要改 `suggest()` 的判定顺序**，除非同步改 `engine.test.ts` 相关用例。
+8. **不要在记录页整行覆盖 metric 而不带旧值**，会清掉腰围或体重。
+9. **不要把 plan 写入改回 `herfit_write`**，会失去乐观锁。
+10. **不要在文档或提交里写密码**，凭据只在本机 `.local` 文件。
+
+---
+
+## 13. 决策记录（为什么这么做）
+
+| 决定               | 原因                                                  |
+| ------------------ | ----------------------------------------------------- |
+| 体重只存 metrics   | 两个来源必然给出两个数字，「基线还是最新」无法自洽    |
+| AI 只写理由        | 模型给数字会漂移，规则给数字可解释、可测试            |
+| 采纳进草稿         | 「计划不可变」是全局约束，就地改会破坏版本历史        |
+| 撤销走基线重算     | 反向加减会累积误差（+1kg 再 -1kg 不等于原值）         |
+| 计划写入单独建函数 | `herfit_write` 体量大、承载六种校验，改它等于全量回归 |
+| 建议卡与说明合并   | 同屏两份建议会互相打架，数字口径还不同                |
+| 单日编辑生成新版本 | 与计划不可变一致，也天然可回溯                        |
+
+---
+
+## 14. 术语
+
+- **档案位（slot）**：一个空间最多两个档案，A/B 位，各自独立。
+- **active / archived**：计划状态，同时只有一条 active。
+- **stamp**：`plan.id + version` 拼成的标识，用来判断页面上的计划是否已被换掉。
+- **草稿（staged）**：已采纳但未提交的建议，只在内存里。
+- **基线（baseline）**：调整发生前那份计划的 days，撤销时用它重算。
+- **sig**：建议条目的稳定签名 `exerciseId:kind:细节`，客户端与服务端靠它对齐。
