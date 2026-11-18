@@ -407,13 +407,30 @@ main {
   flex: 1;
   gap: 10px;
 }
-.week-days > div {
+.week-days > div,
+.week-days > button {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 9px;
   font-size: 11px;
   color: #796972;
+}
+/* 可点击的日卡片：重置按钮外观，只保留悬停反馈 */
+.week-days > button {
+  background: none;
+  border: 0;
+  padding: 4px 2px;
+  border-radius: 10px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.week-days > button:hover {
+  background: #f9eef1;
+}
+.week-days > button:focus-visible {
+  outline: 3px solid #9f6379;
+  outline-offset: 1px;
 }
 .day-dot {
   width: 29px;
@@ -1729,7 +1746,8 @@ legend {
   .week-days {
     gap: 5px;
   }
-  .week-days > div {
+  .week-days > div,
+  .week-days > button {
     font-size: 10px;
   }
   .day-dot {
@@ -1927,7 +1945,8 @@ legend {
   .week-days {
     gap: 12px;
   }
-  .week-days > div {
+  .week-days > div,
+  .week-days > button {
     font-size: 10px;
     gap: 9px;
   }
@@ -2970,4 +2989,73 @@ legend {
   font-size: 15px;
   line-height: 1.85;
   color: #493f45;
+}
+/* 单日编辑：只改一天，保存生成新版本 */
+.day-editor {
+  list-style: none;
+  padding: 0;
+  margin: 14px 0;
+  display: grid;
+  gap: 10px;
+}
+.day-slot {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: #fffdfc;
+}
+.day-slot-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+.day-slot-head strong {
+  font-size: 13px;
+}
+.day-slot-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+}
+.sets-stepper {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sets-stepper button {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: 1px solid #cfc0c7;
+  background: transparent;
+  color: #8d4a61;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+.sets-stepper button:hover {
+  background: #f6e7eb;
+}
+.sets-stepper span {
+  font-size: 12px;
+  color: var(--muted);
+  min-width: 44px;
+  text-align: center;
+}
+.day-slot-swap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.day-slot-swap select {
+  font-size: 12px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #fff;
+  color: var(--ink, #494047);
+  max-width: 150px;
 }

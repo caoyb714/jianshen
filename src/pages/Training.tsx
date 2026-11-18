@@ -17,15 +17,17 @@ import { readJson, writeJson } from '../app/storage'
 import { PageHeading, EmptyState, Modal } from '../components/UI'
 import {
   applyAdjustments,
+  estimateMinutes,
   generatePlan,
+  targetFor,
   type EngineResult,
   type Suggestion,
 } from '../domain/engine'
 import { historyFor, reviewPlan } from '../domain/stats'
 import { getExercise, LIBRARY_REVIEWED } from '../domain/exercises'
 import { weekdayIndex } from '../domain/dates'
-import { AI_CONSENT_KEY, buildBasisPayload, type BasisItem } from '../domain/ai'
-import type { PlanDay, TrainingPlan } from '../domain/model'
+import { AI_CONSENT_KEY, buildBasisPayload, formatTarget, type BasisItem } from '../domain/ai'
+import type { PlanDay, PlanSlot, TrainingPlan } from '../domain/model'
 
 const WEEK_LABELS = ['一', '二', '三', '四', '五', '六', '日']
 
@@ -51,6 +53,9 @@ export default function Training() {
   const [applied, setApplied] = useState<{ version: number; sigs: string[] } | null>(null)
   const [undone, setUndone] = useState<{ sig: string; version: number } | null>(null)
   const [pending, setPending] = useState<string | null>(null)
+  // 单日编辑：只改这一天，保存时生成新版本，旧版归档
+  const [editDay, setEditDay] = useState<PlanDay | null>(null)
+  const [dayBusy, setDayBusy] = useState(false)
   // 提交后规则可能不再给出同一条建议，卡片要留住刚生效的那几条，否则会瞬间消失
   const [appliedItems, setAppliedItems] = useState<{
     version: number
@@ -88,7 +93,89 @@ export default function Training() {
     )
   }, [active.plan, active.workouts])
 
-  /** 条目签名：动作 + 调整方向 + 幅度。客户端与服务端都靠它对齐，模型无权新增。 */
+  /** 打开某一天的编辑：复制一份，取消时不会污染正在使用的计划 */
+  function openDay(day: PlanDay) {
+    if (dayBusy) return
+    setEditDay({
+      ...day,
+      slots: day.slots.map((slot) => ({ ...slot, target: { ...slot.target } })),
+    })
+  }
+
+  function changeSets(index: number, delta: number) {
+    setEditDay((current) =>
+      current
+        ? {
+            ...current,
+            slots: current.slots.map((slot, i) =>
+              i === index ? { ...slot, sets: Math.min(10, Math.max(1, slot.sets + delta)) } : slot,
+            ),
+          }
+        : current,
+    )
+  }
+
+  function swapSlot(index: number, exerciseId: string) {
+    const exercise = getExercise(exerciseId)
+    if (!exercise) return
+    setEditDay((current) =>
+      current
+        ? {
+            ...current,
+            slots: current.slots.map((slot, i) =>
+              i === index
+                ? {
+                    ...slot,
+                    exerciseId,
+                    // 换动作等于换了负荷口径：目标按新动作的类型重算，负荷归零由用户自己填
+                    target: targetFor(exercise, profile.experience),
+                    startLoad: 0,
+                  }
+                : slot,
+            ),
+          }
+        : current,
+    )
+  }
+
+  async function saveDay(skip: boolean) {
+    if (!plan || !editDay || dayBusy) return
+    const slots: PlanSlot[] = skip ? [] : editDay.slots
+    const nextDay: PlanDay = {
+      ...editDay,
+      kind: slots.length ? '训练' : '休息',
+      focus: slots.length ? editDay.focus : '休息',
+      slots,
+      estimatedMinutes: slots.length ? estimateMinutes(slots) : 0,
+    }
+    const days = plan.days.map((day) => (day.index === nextDay.index ? nextDay : day))
+    setDayBusy(true)
+    const next: TrainingPlan = {
+      ...plan,
+      id: crypto.randomUUID(),
+      version: plan.version + 1,
+      generatedAt: new Date().toISOString(),
+      confirmedAt: new Date().toISOString(),
+      status: 'active',
+      days,
+      notes: [
+        skip
+          ? `周${WEEK_LABELS[nextDay.index]}改为休息。`
+          : `已调整周${WEEK_LABELS[nextDay.index]}的安排。`,
+        '旧版本已归档保留。',
+      ],
+    }
+    const saved = await commit({ kind: 'plan', value: next })
+    setDayBusy(false)
+    if (!saved) return
+    setEditDay(null)
+    notify(
+      skip
+        ? `周${WEEK_LABELS[nextDay.index]}已改为休息 · v${next.version}`
+        : `已保存 · v${next.version}`,
+    )
+  }
+
   function sigOf(item: (typeof review)[number]) {
     const detail =
       item.suggestion.kind === 'increase'
@@ -440,17 +527,23 @@ export default function Training() {
           </div>
           <div className="week-days week-plan">
             {plan.days.map((day) => (
-              <div key={day.index} className={day.index === todayIndex ? 'today' : ''}>
+              <button
+                key={day.index}
+                type="button"
+                className={day.index === todayIndex ? 'today' : ''}
+                aria-label={`编辑周${WEEK_LABELS[day.index]}的安排`}
+                onClick={() => openDay(day)}
+              >
                 <span>周{WEEK_LABELS[day.index]}</span>
                 <span className={`day-dot ${day.kind === '训练' ? 'complete' : ''}`}>
                   {day.kind === '训练' ? day.slots.filter((s) => s.role === '主要').length : '—'}
                 </span>
                 <small>{day.kind === '训练' ? `${day.estimatedMinutes}分` : day.kind}</small>
-              </div>
+              </button>
             ))}
           </div>
           <p className="small-muted">
-            每位档案同时只有一份生效计划；重新生成会把旧版本归档，历史记录保留。
+            点某一天可以单独调整那天的动作与组数，或改成休息；只会生成新版本，不影响其他几天。
           </p>
         </section>
       ) : null}
@@ -468,6 +561,106 @@ export default function Training() {
         <p className="demo-caption">
           <RotateCcw size={14} /> 完成第一次训练后，这里会给出负荷调整建议。
         </p>
+      ) : null}
+
+      {editDay ? (
+        <Modal
+          title={`编辑周${WEEK_LABELS[editDay.index]}`}
+          onClose={() => {
+            if (!dayBusy) setEditDay(null)
+          }}
+        >
+          <p className="small-muted">只改这一天，保存后生成新版本；其他几天保持原样。</p>
+          <ul className="day-editor">
+            {editDay.slots.map((slot, index) => {
+              const exercise = getExercise(slot.exerciseId)
+              return (
+                <li key={`${slot.exerciseId}-${index}`} className="day-slot">
+                  <div className="day-slot-head">
+                    <strong>{exercise?.name ?? slot.exerciseId}</strong>
+                    <span className="small-muted">
+                      {formatTarget(slot.target)} · {slot.role}
+                    </span>
+                  </div>
+                  <div className="day-slot-controls">
+                    <div className="sets-stepper">
+                      <button
+                        type="button"
+                        aria-label={`减少${exercise?.name ?? '动作'}的组数`}
+                        aria-disabled={dayBusy}
+                        onClick={() => changeSets(index, -1)}
+                      >
+                        −
+                      </button>
+                      <span>{slot.sets} 组</span>
+                      <button
+                        type="button"
+                        aria-label={`增加${exercise?.name ?? '动作'}的组数`}
+                        aria-disabled={dayBusy}
+                        onClick={() => changeSets(index, 1)}
+                      >
+                        +
+                      </button>
+                    </div>
+                    {exercise && exercise.alternatives.length > 0 ? (
+                      <label className="day-slot-swap">
+                        <span className="small-muted">换动作</span>
+                        <select
+                          value={slot.exerciseId}
+                          aria-label={`替换${exercise.name}`}
+                          onChange={(event) => swapSlot(index, event.target.value)}
+                        >
+                          <option value={slot.exerciseId}>{exercise.name}</option>
+                          {exercise.alternatives.map((id) => {
+                            const alternative = getExercise(id)
+                            return alternative ? (
+                              <option key={id} value={id}>
+                                {alternative.name}
+                              </option>
+                            ) : null
+                          })}
+                        </select>
+                      </label>
+                    ) : null}
+                  </div>
+                </li>
+              )
+            })}
+          </ul>
+          {editDay.slots.length === 0 ? (
+            <p className="small-muted">这天没有动作，保存后会变成休息日。</p>
+          ) : null}
+          <p className="small-muted">
+            预计 {editDay.slots.length ? estimateMinutes(editDay.slots) : 0} 分钟。
+          </p>
+          <div className="actions">
+            <button
+              className="button secondary"
+              aria-disabled={dayBusy}
+              onClick={() => void saveDay(false)}
+            >
+              {dayBusy ? '保存中…' : `保存为 v${plan ? plan.version + 1 : ''}`}
+            </button>
+            <button
+              className="text-button"
+              aria-disabled={dayBusy}
+              onClick={() => {
+                if (!dayBusy) setEditDay(null)
+              }}
+            >
+              取消
+            </button>
+            {editDay.slots.length ? (
+              <button
+                className="text-button"
+                aria-disabled={dayBusy}
+                onClick={() => void saveDay(true)}
+              >
+                这天改成休息
+              </button>
+            ) : null}
+          </div>
+        </Modal>
       ) : null}
 
       {consentOpen ? (

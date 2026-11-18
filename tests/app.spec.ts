@@ -366,3 +366,37 @@ test('weekly review states facts on the growth page', async ({ page }) => {
   await expect(panel).toBeVisible()
   await expect(panel).toContainText('这周练了')
 })
+
+test('a single day can be edited without regenerating the week', async ({ page }) => {
+  await ensurePlan(page)
+  const dayButton = page.locator('.week-plan > button').filter({ hasText: '分' }).first()
+  const label = (await dayButton.getAttribute('aria-label'))!.replace('的安排', '')
+  await dayButton.click()
+
+  const dialog = page.getByRole('dialog')
+  await expect(dialog.getByRole('heading', { name: label })).toBeVisible()
+  const sets = dialog.locator('.sets-stepper span').first()
+  const before = Number((await sets.innerText()).replace(/\D/g, ''))
+  await dialog.getByRole('button', { name: /^减少/ }).first().click()
+  await expect(sets).toHaveText(`${before - 1} 组`)
+
+  // 保存只生成新版本，不重排整周
+  await dialog.getByRole('button', { name: /保存为 v2/ }).click()
+  await expect(page.getByText(/v2 · 生成于/)).toBeVisible()
+
+  // 重新打开同一天：改动已持久化
+  await page.getByRole('button', { name: `${label}的安排` }).click()
+  await expect(page.getByRole('dialog').locator('.sets-stepper span').first()).toHaveText(
+    `${before - 1} 组`,
+  )
+  await page.getByRole('dialog').getByRole('button', { name: '取消' }).click()
+
+  // 另一天改成休息：同样只动那一天
+  const other = page.locator('.week-plan > button').filter({ hasText: '分' }).last()
+  const otherLabel = (await other.getAttribute('aria-label'))!.replace('的安排', '')
+  await other.click()
+  await page.getByRole('dialog').getByRole('button', { name: '这天改成休息' }).click()
+  await expect(page.getByText(/v3 · 生成于/)).toBeVisible()
+  await expect(page.getByRole('button', { name: `${otherLabel}的安排` })).toContainText('休息')
+  await expect(page.getByRole('button', { name: `${label}的安排` })).toContainText('分')
+})
