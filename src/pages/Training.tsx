@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   ArrowRight,
@@ -14,6 +14,16 @@ import {
 import { useProfile } from '../app/Store'
 import { requestBasis } from '../app/explain'
 import { readJson, writeJson } from '../app/storage'
+import {
+  canAuto,
+  canManual,
+  exhausted,
+  cooldownLeft,
+  markAuto,
+  markManual,
+  normalize,
+  type BasisState as BasisGate,
+} from '../app/aiBasis'
 import { PageHeading, EmptyState, Modal } from '../components/UI'
 import {
   applyAdjustments,
@@ -31,6 +41,8 @@ import { AI_CONSENT_KEY, buildBasisPayload, formatTarget, type BasisItem } from 
 import type { PlanDay, PlanSlot, TrainingPlan } from '../domain/model'
 
 const WEEK_LABELS = ['一', '二', '三', '四', '五', '六', '日']
+/** 触发策略的落盘键：换版本或换天会自动重置，不需要手动清理 */
+const BASIS_GATE_KEY = 'herfit.aiBasis.v1'
 
 /** 建议条目的理由有四种可见状态；失败只降级理由位，不影响幅度与采纳。 */
 type BasisState = { state: 'idle' | 'loading' | 'ok' | 'failed'; texts: Record<string, string> }
@@ -56,6 +68,8 @@ export default function Training() {
   // 单日编辑：只改这一天，保存时生成新版本，旧版归档
   const [editDay, setEditDay] = useState<PlanDay | null>(null)
   const [dayBusy, setDayBusy] = useState(false)
+  const [now, setNow] = useState(() => Date.now())
+  const autoGuard = useRef(false)
   const todayIndex = weekdayIndex(today)
   const todayPlan = plan?.days[todayIndex]
 
@@ -72,6 +86,8 @@ export default function Training() {
 
   // 计划版本或日期变化后，旧理由与草稿都属于上一份安排，直接清空
   const planStamp = plan ? `${plan.id}:${plan.version}` : ''
+  const readGate = () => normalize(readJson<BasisGate>(BASIS_GATE_KEY), today, planStamp)
+  const saveGate = (next: BasisGate) => writeJson(BASIS_GATE_KEY, next)
   useEffect(() => {
     setBasis({ state: 'idle', texts: {} })
     setStaged([])
@@ -212,7 +228,7 @@ export default function Training() {
     return [...appliedViews, ...extra]
   }, [appliedRows, review, basis.texts])
 
-  async function loadBasis() {
+  async function loadBasis(kind: 'auto' | 'manual') {
     if (!plan || !todayPlan || review.length === 0) return
     setBasis((current) => ({ state: 'loading', texts: current.texts }))
     const items: BasisItem[] = review.map((item) => {
@@ -239,12 +255,41 @@ export default function Training() {
         today,
       }),
     )
+    const current = readGate()
+    if (result.ok) {
+      // 只有成功才计数：一次网络抖动不该白白用掉当天的额度
+      saveGate(kind === 'auto' ? markAuto(current) : markManual(current, Date.now()))
+      setNow(Date.now())
+    }
     setBasis(result.ok ? { state: 'ok', texts: result.texts } : { state: 'failed', texts: {} })
   }
 
+  // 进页面自动拉一次：已同意 + 在线 + 有建议 + 本版本本天没拉过
+  useEffect(() => {
+    if (!plan || !todayPlan || review.length === 0) return
+    if (basis.state !== 'idle') return
+    if (readJson<boolean>(AI_CONSENT_KEY) !== true) return
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return
+    if (autoGuard.current || !canAuto(readGate())) return
+    autoGuard.current = true
+    const timer = window.setTimeout(() => void loadBasis('auto'), 800)
+    return () => window.clearTimeout(timer)
+  }, [planStamp, today, review.length, basis.state])
+
+  // 冷却期间每秒刷新一次，按钮上的秒数才会走
+  useEffect(() => {
+    if (cooldownLeft(readGate(), now) <= 0) return
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [now, basis.state, planStamp])
+
   function askBasis() {
+    if (!canManual(readGate(), Date.now())) {
+      setNow(Date.now())
+      return
+    }
     if (readJson<boolean>(AI_CONSENT_KEY) === true) {
-      void loadBasis()
+      void loadBasis('manual')
       return
     }
     setConsentOpen(true)
@@ -253,7 +298,7 @@ export default function Training() {
   function approveBasis() {
     writeJson(AI_CONSENT_KEY, true)
     setConsentOpen(false)
-    void loadBasis()
+    void loadBasis('manual')
   }
 
   const editedBy = cloud ? cloud.viewerId : 'local'
@@ -571,9 +616,17 @@ export default function Training() {
                 理由暂不可用，再试一次
               </button>
             ) : basis.state === 'idle' ? (
-              <button className="text-button" onClick={askBasis}>
-                生成理由
-              </button>
+              exhausted(readGate()) ? (
+                <span className="small-muted">今天的理由已用完，明天再来。</span>
+              ) : cooldownLeft(readGate(), now) > 0 ? (
+                <button className="text-button" aria-disabled="true">
+                  稍后再试（{Math.ceil(cooldownLeft(readGate(), now) / 1000)} 秒）
+                </button>
+              ) : (
+                <button className="text-button" onClick={askBasis}>
+                  生成理由
+                </button>
+              )
             ) : null}
           </div>
         </section>
