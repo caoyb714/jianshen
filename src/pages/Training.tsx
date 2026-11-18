@@ -12,7 +12,7 @@ import {
   Sparkles,
 } from 'lucide-react'
 import { useProfile } from '../app/Store'
-import { requestExplain } from '../app/explain'
+import { requestBasis } from '../app/explain'
 import { readJson, writeJson } from '../app/storage'
 import { PageHeading, EmptyState, Modal } from '../components/UI'
 import {
@@ -21,16 +21,16 @@ import {
   type EngineResult,
   type Suggestion,
 } from '../domain/engine'
-import { reviewPlan } from '../domain/stats'
+import { historyFor, reviewPlan } from '../domain/stats'
 import { getExercise, LIBRARY_REVIEWED } from '../domain/exercises'
 import { weekdayIndex } from '../domain/dates'
-import { AI_CONSENT_KEY, buildExplainPayload } from '../domain/ai'
+import { AI_CONSENT_KEY, buildBasisPayload, type BasisItem } from '../domain/ai'
 import type { PlanDay, TrainingPlan } from '../domain/model'
 
 const WEEK_LABELS = ['一', '二', '三', '四', '五', '六', '日']
 
-/** 说明有四种可见状态：未生成、生成中、成功、失败（失败只显示一行 muted 文案）。 */
-type ExplainState = { state: 'idle' | 'loading' | 'ok' | 'failed'; text: string }
+/** 建议条目的理由有四种可见状态；失败只降级理由位，不影响幅度与采纳。 */
+type BasisState = { state: 'idle' | 'loading' | 'ok' | 'failed'; texts: Record<string, string> }
 
 function targetText(day: PlanDay) {
   const main = day.slots.filter((slot) => slot.role === '主要')
@@ -43,16 +43,37 @@ export default function Training() {
   const plan = active.plan
   const [draft, setDraft] = useState<Extract<EngineResult, { ok: true }> | null>(null)
   const [busy, setBusy] = useState(false)
-  const [explain, setExplain] = useState<ExplainState>({ state: 'idle', text: '' })
+  const [basis, setBasis] = useState<BasisState>({ state: 'idle', texts: {} })
   const [consentOpen, setConsentOpen] = useState(false)
+  // 采纳只是进草稿：不进库、不改当前计划，卡底按钮才是唯一的提交入口
+  const [staged, setStaged] = useState<string[]>([])
+  const [ignored, setIgnored] = useState<string[]>([])
+  const [applied, setApplied] = useState<{ version: number; sigs: string[] } | null>(null)
+  const [undone, setUndone] = useState<{ sig: string; version: number } | null>(null)
+  const [pending, setPending] = useState<string | null>(null)
+  // 提交后规则可能不再给出同一条建议，卡片要留住刚生效的那几条，否则会瞬间消失
+  const [appliedItems, setAppliedItems] = useState<{
+    version: number
+    items: ReturnType<typeof reviewPlan>
+  } | null>(null)
+  // 撤销要回到「调整前」的基线重算，而不是做反向数学；基线只在本会话内保留
+  const [baseline, setBaseline] = useState<PlanDay[] | null>(null)
   const todayIndex = weekdayIndex(today)
   const todayPlan = plan?.days[todayIndex]
 
-  // 计划版本或日期变化后，旧说明描述的已经不是今天这份安排，直接清空
+  // 计划版本或日期变化后，旧理由与草稿都属于上一份安排，直接清空
   const planStamp = plan ? `${plan.id}:${plan.version}` : ''
   useEffect(() => {
-    setExplain({ state: 'idle', text: '' })
-  }, [planStamp, today])
+    setBasis({ state: 'idle', texts: {} })
+    setStaged([])
+    setIgnored([])
+    setPending(null)
+    setBaseline(null)
+    // 刚提交成功的那一版要保留「已生效」，否则卡片会立刻退回未采纳态
+    setApplied((current) => (current && current.version === plan?.version ? current : null))
+    setUndone((current) => (current && current.version === plan?.version ? current : null))
+    setAppliedItems((current) => (current && current.version === plan?.version ? current : null))
+  }, [planStamp, today, plan?.version])
 
   const preview = useMemo(() => {
     if (!draft) return null
@@ -67,21 +88,112 @@ export default function Training() {
     )
   }, [active.plan, active.workouts])
 
-  function applyReview() {
-    if (!plan) return
-    const days = applyAdjustments(
-      plan.days,
-      review.map(({ exerciseId, name, suggestion }) => ({ exerciseId, name, suggestion })),
+  /** 条目签名：动作 + 调整方向 + 幅度。客户端与服务端都靠它对齐，模型无权新增。 */
+  function sigOf(item: (typeof review)[number]) {
+    const detail =
+      item.suggestion.kind === 'increase'
+        ? (item.suggestion.nextLoad ?? item.suggestion.nextReps ?? '')
+        : item.suggestion.kind === 'reduce'
+          ? (item.suggestion.nextLoad ?? '')
+          : 'stop'
+    return `${item.exerciseId}:${item.suggestion.kind}:${detail}`
+  }
+
+  async function loadBasis() {
+    if (!plan || !todayPlan || review.length === 0) return
+    setBasis((current) => ({ state: 'loading', texts: current.texts }))
+    const items: BasisItem[] = review.map((item) => {
+      const last = historyFor(active.workouts, item.exerciseId, 1)[0]
+      const set = last?.sets[last.sets.length - 1]
+      return {
+        sig: sigOf(item),
+        name: item.name,
+        label: adjustLabel(item.suggestion),
+        evidence: {
+          reps: set?.reps ?? null,
+          load: set?.load ?? null,
+          difficulty: last?.difficulty ?? null,
+        },
+      }
+    })
+    const result = await requestBasis(
+      buildBasisPayload({
+        profile,
+        day: todayPlan,
+        planVersion: plan.version,
+        items,
+        workouts: active.workouts,
+        today,
+      }),
     )
-    setDraft({
-      ok: true,
+    setBasis(result.ok ? { state: 'ok', texts: result.texts } : { state: 'failed', texts: {} })
+  }
+
+  function askBasis() {
+    if (readJson<boolean>(AI_CONSENT_KEY) === true) {
+      void loadBasis()
+      return
+    }
+    setConsentOpen(true)
+  }
+
+  function approveBasis() {
+    writeJson(AI_CONSENT_KEY, true)
+    setConsentOpen(false)
+    void loadBasis()
+  }
+
+  /**
+   * 提交一组调整，生成新版本。
+   * undo 时传的是「撤销的那条」，其余采纳项从基线重算，避免反向加减累积误差。
+   */
+  async function submitAdjustments(sigs: string[], kind: 'commit' | 'undo', drop?: string) {
+    if (!plan || pending) return
+    const base = kind === 'undo' ? baseline : plan.days
+    if (!base) return
+    // 撤销时规则可能已经不再给出同一条，必须从提交时的快照里挑，而不是重新算
+    const source = kind === 'undo' ? (appliedItems?.items ?? []) : review
+    const remaining = sigs.filter((sig) => sig !== drop)
+    const picked = source.filter((item) => remaining.includes(sigOf(item)))
+    const days = picked.length
+      ? applyAdjustments(
+          base,
+          picked.map(({ exerciseId, name, suggestion }) => ({ exerciseId, name, suggestion })),
+        )
+      : base
+    setPending(kind === 'undo' ? (drop ?? 'undo') : 'commit')
+    const next: TrainingPlan = {
+      profileId: active.id,
+      id: crypto.randomUUID(),
+      version: plan.version + 1,
+      generatedAt: new Date().toISOString(),
+      confirmedAt: new Date().toISOString(),
+      status: 'active',
+      input: plan.input,
       days,
       notes: [
-        '已按最近记录调整：' +
-          review.map((item) => `${item.name}（${adjustLabel(item.suggestion)}）`).join('、'),
-        '确认后才会替换当前计划，旧版本归档保留。',
+        '按最近记录调整：' + picked.map((item) => item.name).join('、'),
+        '旧版本已归档保留。',
       ],
-    })
+    }
+    const saved = await commit({ kind: 'plan', value: next })
+    setPending(null)
+    if (!saved) return
+    if (kind === 'commit') {
+      setBaseline(plan.days)
+      setApplied({ version: next.version, sigs })
+      setAppliedItems({ version: next.version, items: picked })
+      setStaged([])
+      setUndone(null)
+      notify(`已生成 v${next.version}，旧版本已归档`)
+    } else {
+      setBaseline(base)
+      setApplied(remaining.length ? { version: next.version, sigs: remaining } : null)
+      setAppliedItems(picked.length ? { version: next.version, items: picked } : null)
+      setUndone({ sig: drop ?? '', version: next.version })
+      setStaged([])
+      notify(`已撤销，生成了 v${next.version}`)
+    }
   }
 
   function generate() {
@@ -131,32 +243,6 @@ export default function Training() {
   }
 
   const shown = preview ?? todayPlan
-
-  // 说明只解释已生效的计划，因此失败也不回写任何状态，训练流程完全不受影响
-  async function runExplain() {
-    if (!todayPlan || todayPlan.slots.length === 0) return
-    setExplain({ state: 'loading', text: '' })
-    const result = await requestExplain(
-      buildExplainPayload({ profile, day: todayPlan, workouts: active.workouts, today }),
-    )
-    setExplain(result.ok ? { state: 'ok', text: result.text } : { state: 'failed', text: '' })
-  }
-
-  function startExplain() {
-    // 同意标记写在本机；没标记过就先解释清楚要发什么，再让用户决定
-    if (readJson<boolean>(AI_CONSENT_KEY) === true) {
-      void runExplain()
-      return
-    }
-    setConsentOpen(true)
-  }
-
-  function approveExplain() {
-    // 存储不可用（隐私模式）时也继续生成：本次同意已经明确，不必二次打断
-    writeJson(AI_CONSENT_KEY, true)
-    setConsentOpen(false)
-    void runExplain()
-  }
 
   return (
     <>
@@ -216,69 +302,131 @@ export default function Training() {
         </div>
       )}
 
-      {/* 今日说明只是对已生效计划的人话解释：休息日没有动作可解释，因此不显示 */}
-      {plan && !draft && todayPlan && todayPlan.slots.length > 0 ? (
-        <section className="panel">
+      {/* 规则给幅度、AI 写理由：两块合成一张卡，避免同屏出现两份互相打架的建议 */}
+      {plan && !draft && (appliedItems?.items ?? review).length > 0 ? (
+        <section className="panel adjust-panel">
           <div className="section-heading">
-            <h2>今日说明</h2>
-            <span className="soft-label">DeepSeek</span>
-          </div>
-          {explain.state === 'ok' ? (
-            <>
-              <p>{explain.text}</p>
-              <p className="small-muted">由 DeepSeek 生成，仅供参考；计划本身由本地规则决定。</p>
-              <button className="text-button" onClick={startExplain}>
-                重新生成
-              </button>
-            </>
-          ) : explain.state === 'loading' ? (
-            <button className="button secondary" disabled>
-              正在生成…
-            </button>
-          ) : explain.state === 'failed' ? (
-            // 静默降级：不报错、不重试、不触碰计划；给一个重新入口，避免只能刷新页面
-            <>
-              <p className="small-muted">暂时无法生成说明，训练计划不受影响。</p>
-              <button className="text-button" onClick={startExplain}>
-                重新生成说明
-              </button>
-            </>
-          ) : (
-            <>
-              <button className="button secondary" onClick={startExplain}>
-                生成今日说明
-              </button>
-              <p className="small-muted">
-                会把你档案里的年龄、经验、器械和今天的安排发送给 DeepSeek，不含昵称和邮箱。
-              </p>
-            </>
-          )}
-        </section>
-      ) : null}
-
-      {plan && !draft && review.length > 0 ? (
-        <section className="panel">
-          <div className="section-heading">
-            <h2>负荷调整建议</h2>
-            <span className="status-chip">待确认</span>
+            <h2>今天可以这样调</h2>
+            <span className="soft-label">幅度由本地规则计算</span>
           </div>
           <p className="small-muted">
-            依据最近两次训练记录给出。确认后会生成新版本计划，旧版本归档保留。
+            依据最近两次训练记录。采纳只是先记下来，卡底生成新版本后才真正生效。
           </p>
           <ul className="slot-list">
-            {review.map((item) => (
-              <li key={item.exerciseId} className="slot-row">
-                <span className="exercise-number">{adjustLabel(item.suggestion).slice(0, 1)}</span>
-                <div>
-                  <h3>{item.name}</h3>
-                  <p>{item.suggestion.reason}</p>
-                </div>
-              </li>
-            ))}
+            {(appliedItems?.items ?? review).map((item) => {
+              const sig = sigOf(item)
+              const isApplied = applied?.sigs.includes(sig) ?? false
+              const isStaged = staged.includes(sig)
+              const isIgnored = ignored.includes(sig)
+              const reason = basis.texts[sig] ?? item.suggestion.reason
+              return (
+                <li
+                  key={sig}
+                  className={[
+                    'slot-row',
+                    'adjust-row',
+                    isApplied ? 'applied' : '',
+                    isStaged ? 'staged' : '',
+                    isIgnored ? 'ignored' : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' ')}
+                >
+                  <div className="adjust-head">
+                    <h3>{item.name}</h3>
+                    <span className="adjust-chip">{adjustLabel(item.suggestion)}</span>
+                  </div>
+                  {isIgnored ? null : <p className="adjust-reason">{reason}</p>}
+                  <div className="adjust-actions">
+                    {isApplied ? (
+                      <>
+                        <span className="small-muted">
+                          已生效 · v{applied?.version}，撤销不会改回旧版
+                        </span>
+                        <button
+                          className="text-button"
+                          aria-disabled={pending !== null}
+                          onClick={() => void submitAdjustments(applied?.sigs ?? [], 'undo', sig)}
+                        >
+                          {pending === sig ? `正在生成 v${plan.version + 1}…` : '撤销并生成新版本'}
+                        </button>
+                      </>
+                    ) : isStaged ? (
+                      <>
+                        <span className="small-muted">已采纳 · 下次生成计划时应用</span>
+                        <button
+                          className="text-button"
+                          onClick={() => setStaged((cur) => cur.filter((row) => row !== sig))}
+                        >
+                          移出本次调整
+                        </button>
+                      </>
+                    ) : isIgnored ? (
+                      <>
+                        <span className="small-muted">已忽略</span>
+                        <button
+                          className="text-button"
+                          onClick={() => setIgnored((cur) => cur.filter((row) => row !== sig))}
+                        >
+                          恢复
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        {undone?.sig === sig ? (
+                          <span className="small-muted">已撤销 · v{undone.version}</span>
+                        ) : null}
+                        <span className="adjust-spacer" />
+                        <button
+                          className="chip-button"
+                          aria-disabled={pending !== null}
+                          onClick={() => {
+                            setIgnored((cur) => cur.filter((row) => row !== sig))
+                            setStaged((cur) => (cur.includes(sig) ? cur : [...cur, sig]))
+                          }}
+                        >
+                          采纳
+                        </button>
+                        <button
+                          className="text-button"
+                          onClick={() => setIgnored((cur) => [...cur, sig])}
+                        >
+                          忽略
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </li>
+              )
+            })}
           </ul>
-          <button className="button primary" onClick={applyReview}>
-            按建议生成新计划
-          </button>
+          {staged.length ? (
+            <button
+              className="button secondary adjust-submit"
+              aria-disabled={pending !== null}
+              onClick={() => void submitAdjustments(staged, 'commit')}
+            >
+              {pending === 'commit'
+                ? `正在生成 v${plan.version + 1}…`
+                : `按 ${staged.length} 条建议生成新版本`}
+            </button>
+          ) : null}
+          <div className="adjust-credit">
+            <span className="small-muted">
+              调整幅度由本地规则按你的记录计算；理由说明由 AI 改写，仅供参考。
+            </span>
+            {basis.state === 'loading' ? (
+              <span className="small-muted">正在整理理由…</span>
+            ) : basis.state === 'failed' ? (
+              <button className="text-button" onClick={askBasis}>
+                理由暂不可用，再试一次
+              </button>
+            ) : basis.state === 'idle' ? (
+              <button className="text-button" onClick={askBasis}>
+                生成理由
+              </button>
+            ) : null}
+          </div>
         </section>
       ) : null}
 
@@ -323,16 +471,18 @@ export default function Training() {
       ) : null}
 
       {consentOpen ? (
-        <Modal title="把数据发送给 DeepSeek 生成说明" onClose={() => setConsentOpen(false)}>
-          <p>只会发送下面这些内容，不含昵称、邮箱和任何账号标识：</p>
+        <Modal title="把数据发送给 DeepSeek 生成理由" onClose={() => setConsentOpen(false)}>
+          <p>只会发送下面这些内容，不含昵称、邮箱和任何账号标识，也不含体重：</p>
           <ul className="small-muted">
-            <li>档案：年龄、训练经验、每周天数、单次时长、可用器械、身体限制（最多 80 字）</li>
-            <li>今日：训练主题、预计时长，以及每个动作的名称、组数、目标和角色</li>
-            <li>近 7 天：完成次数、累计分钟数、平均难度</li>
+            <li>档案：年龄、训练经验、可用器械、身体限制（最多 80 字）</li>
+            <li>今日：训练主题，以及每个动作的名称、组数、目标和角色</li>
+            <li>建议：每条调整的幅度，以及最近一次的次数、负荷和难度</li>
           </ul>
-          <p className="small-muted">说明只用于展示，不会写回计划，也不会存入数据库。</p>
+          <p className="small-muted">
+            调整幅度由本地规则计算，理由是改写，只用于展示，不会写回计划。
+          </p>
           <div className="actions">
-            <button className="button primary" onClick={approveExplain}>
+            <button className="button primary" onClick={approveBasis}>
               同意并生成
             </button>
             <button className="button secondary" onClick={() => setConsentOpen(false)}>

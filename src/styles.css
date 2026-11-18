@@ -2602,6 +2602,92 @@ legend {
   text-align: center;
   color: #8c6b7b;
 }
+/* 调整建议卡：规则给幅度、AI 写理由，采纳先进草稿 */
+.adjust-row {
+  display: block;
+  border-left: 1px solid transparent;
+  padding-left: 12px;
+}
+.adjust-row.applied {
+  border-left: 3px solid #9baf95;
+  background: #f7faf3;
+  padding-left: 10px;
+}
+.adjust-row.staged {
+  border-left: 3px solid #d8bec8;
+  background: #fffdfc;
+  padding-left: 10px;
+}
+.adjust-row.ignored {
+  opacity: 0.72;
+}
+.adjust-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.adjust-head h3 {
+  font-size: 14px;
+  margin: 0;
+}
+.adjust-chip {
+  font-size: 10px;
+  color: #576b4c;
+  background: #eaf0e4;
+  border-radius: 5px;
+  padding: 4px 9px;
+  white-space: nowrap;
+}
+.adjust-reason {
+  font-size: 12px;
+  line-height: 1.8;
+  color: var(--muted);
+  margin: 4px 0 0;
+}
+.adjust-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+.adjust-spacer {
+  flex: 1;
+}
+.adjust-submit {
+  margin-top: 12px;
+}
+.adjust-credit {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+.chip-button {
+  min-height: 32px;
+  padding: 5px 12px;
+  border-radius: 8px;
+  border: 1px solid #cfc0c7;
+  background: transparent;
+  color: #8d4a61;
+  font-size: 12px;
+  cursor: pointer;
+}
+.chip-button:hover {
+  background: #f6e7eb;
+}
+/* 进行中的按钮保持可读：全局 disabled 的 0.48 透明度会把 12px 文字糊成粉雾 */
+[aria-disabled='true'] {
+  opacity: 1;
+  color: var(--ink-3, #8a7580);
+  cursor: default;
+}
+[aria-disabled='true']:hover {
+  background: transparent;
+}
 .set-grid {
   display: grid;
   gap: 8px;

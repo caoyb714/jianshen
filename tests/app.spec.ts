@@ -231,28 +231,93 @@ test('an unconfirmed restriction blocks plan generation', async ({ page }) => {
   await expect(page.getByText('不能替代专业评估')).toBeVisible()
 })
 
-test('explain failure degrades quietly without touching the plan', async ({ page }) => {
+test('adopting a suggestion stays a draft until the version is generated', async ({ page }) => {
   await ensurePlan(page)
+
+  // 造两次「全部达标、难度不高」的记录：这样规则引擎才会给出可执行的加量建议
+  await page.evaluate(() => {
+    const raw = JSON.parse(localStorage.getItem('herfit.demo.v2') ?? '{}')
+    const plan = (raw.plans ?? []).find((row: { status: string }) => row.status === 'active')
+    const day = plan.days.find((row: { kind: string }) => row.kind === '训练')
+    const slot = day.slots.find((row: { role: string }) => row.role === '主要')
+    const targetMax = slot.target.type === 'reps' ? slot.target.max : 12
+    const iso = (offset: number) => {
+      const date = new Date()
+      date.setDate(date.getDate() - offset)
+      const pad = (value: number) => String(value).padStart(2, '0')
+      return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+    }
+    const make = (offset: number, id: string) => ({
+      profileId: plan.profileId,
+      id,
+      date: iso(offset),
+      planId: plan.id,
+      planVersion: plan.version,
+      title: day.focus,
+      minutes: 20,
+      difficulty: 6,
+      discomfort: false,
+      feeling: '',
+      createdAt: new Date().toISOString(),
+      exercises: [
+        {
+          exerciseId: slot.exerciseId,
+          name: slot.exerciseId,
+          role: slot.role,
+          plannedSets: 3,
+          targetReps: slot.target.type === 'reps' ? slot.target.max : null,
+          targetSeconds: slot.target.type === 'hold' ? slot.target.seconds : null,
+          replacedFrom: null,
+          sets: [
+            { reps: targetMax, load: 10, done: true },
+            { reps: targetMax, load: 10, done: true },
+            { reps: targetMax, load: 10, done: true },
+          ],
+        },
+      ],
+    })
+    raw.workouts = [
+      ...(raw.workouts ?? []),
+      make(1, '11111111-1111-4111-8111-111111111111'),
+      make(2, '22222222-2222-4222-8222-222222222222'),
+    ]
+    localStorage.setItem('herfit.demo.v2', JSON.stringify(raw))
+  })
+  await page.goto('/training')
+
+  const card = page.locator('.adjust-panel')
+  await expect(card).toBeVisible()
   const week = page.locator('.week-days.week-plan')
-  await expect(week).toBeVisible()
   const before = await week.innerText()
 
-  // 本地开发没有 Pages Functions，/api/explain 必然 404：这正是在测降级路径
-  await page.getByRole('button', { name: '生成今日说明' }).click()
-  await page.getByRole('dialog').getByRole('button', { name: '同意并生成' }).click()
-  await expect(page.getByText('暂时无法生成说明，训练计划不受影响。')).toBeVisible()
-
-  // 不弹错误横幅、不改周计划、不拦训练入口
-  await expect(page.getByRole('alert')).toHaveCount(0)
-  // 用 innerText 精确比对：toHaveText 会把空白折叠，看不出格子结构是否被改动
+  // 采纳只是进草稿：计划文本与版本都不变
+  await card.getByRole('button', { name: '采纳' }).first().click()
+  await expect(card.getByText('已采纳 · 下次生成计划时应用').first()).toBeVisible()
+  await expect(card.getByRole('button', { name: /按 1 条建议生成新版本/ })).toBeVisible()
   expect(await week.innerText()).toBe(before)
-  await expect(page.getByRole('link', { name: '开始今天的训练' })).toBeVisible()
-  await expect(page.getByRole('button', { name: '重新生成计划' })).toBeVisible()
 
-  // 说明失败后仍可正常进入打卡
-  await page.getByRole('link', { name: '开始今天的训练' }).click()
-  await page.getByRole('button', { name: '开始今天的训练' }).click()
-  await expect(page.getByText('本次训练')).toBeVisible()
+  // 本地开发没有 Functions，/api/explain 必然 404：理由位降级，幅度与采纳不受影响
+  await card.getByRole('button', { name: '生成理由' }).click()
+  await page.getByRole('dialog').getByRole('button', { name: '同意并生成' }).click()
+  await expect(card.getByRole('button', { name: '理由暂不可用，再试一次' })).toBeVisible()
+  await expect(page.getByRole('alert')).toHaveCount(0)
+  await expect(card.getByRole('button', { name: /按 1 条建议生成新版本/ })).toBeVisible()
+
+  // 移出草稿后按钮消失，计划仍未改动
+  await card.getByRole('button', { name: '移出本次调整' }).first().click()
+  await expect(card.getByRole('button', { name: /按 1 条建议生成新版本/ })).toHaveCount(0)
+  expect(await week.innerText()).toBe(before)
+
+  // 真正提交：版本 +1，条目转为已生效
+  await card.getByRole('button', { name: '采纳' }).first().click()
+  await card.getByRole('button', { name: /按 1 条建议生成新版本/ }).click()
+  await expect(page.getByText(/v2 · 生成于/)).toBeVisible()
+  await expect(card.getByText(/已生效 · v2/)).toBeVisible()
+
+  // 撤销走基线重算，生成 v3 而不是改回 v1
+  await card.getByRole('button', { name: '撤销并生成新版本' }).click()
+  await expect(page.getByText(/v3 · 生成于/)).toBeVisible()
+  await expect(card.getByText(/已撤销 · v3/)).toBeVisible()
 })
 
 test('an interrupted session is restored after reload', async ({ page }) => {
