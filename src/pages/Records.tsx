@@ -305,7 +305,7 @@ export default function Records() {
                 <div className="history-actions">
                   {pendingDelete === log.id ? (
                     <>
-                      <span className="small-muted">删除后无法恢复，统计会随之变化。</span>
+                      <span className="small-muted">删除后无法恢复。</span>
                       <button
                         className="text-button danger"
                         disabled={busy}

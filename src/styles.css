@@ -975,7 +975,7 @@ main {
   border-top: 1px dashed var(--border);
 }
 .history-actions .small-muted {
-  flex: 1 1 180px;
+  flex: 1 1 auto;
 }
 .growth-summary {
   display: grid;
