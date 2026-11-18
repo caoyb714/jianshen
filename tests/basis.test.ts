@@ -53,15 +53,13 @@ afterEach(() => {
 
 describe('条目化依据', () => {
   it('按 sig 返回每条理由', async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(
-        upstream(
-          JSON.stringify({
-            items: [{ sig: payload.items[0].sig, text: '上次 10 次很稳，负荷加 2.5 kg。' }],
-          }),
-        ),
-      )
+    const fetchMock = vi.fn().mockResolvedValue(
+      upstream(
+        JSON.stringify({
+          items: [{ sig: payload.items[0].sig, text: '上次 10 次很稳，负荷加 2.5 kg。' }],
+        }),
+      ),
+    )
     vi.stubGlobal('fetch', fetchMock)
 
     const body = (await (await call(payload)).json()) as {
@@ -178,5 +176,148 @@ describe('buildBasisPayload', () => {
     expect(text).not.toContain(profile.name)
     expect(built.items).toHaveLength(1)
     expect(built.planVersion).toBe(3)
+  })
+})
+
+/** 这些防御分支原本由整段说明的测试覆盖，接口合并后必须原样迁到条目化路径。 */
+function rawCall(options: {
+  body?: string
+  method?: string
+  ip?: string
+  key?: string
+  declared?: string
+  text?: () => Promise<string>
+}) {
+  const headers: Record<string, string> = { 'cf-connecting-ip': options.ip ?? nextIp() }
+  if (options.declared) headers['content-length'] = options.declared
+  const request = {
+    method: options.method ?? 'POST',
+    headers: new Headers(headers),
+    text: options.text ?? (async () => options.body ?? ''),
+  } as unknown as Request
+  return onRequest({
+    request,
+    env: { DEEPSEEK_API_KEY: options.key === undefined ? key : options.key },
+  })
+}
+
+function expectNoLeak(body: unknown) {
+  const text = JSON.stringify(body)
+  expect(text).not.toMatch(/https?:\/\//)
+  expect(text).not.toContain(key)
+  expect(text).not.toContain('sk-')
+}
+
+describe('条目化依据的防御分支', () => {
+  it('非 POST 返回 405，且禁止缓存', async () => {
+    const response = await rawCall({ method: 'GET' })
+    expect(response.status).toBe(405)
+    expect(await response.json()).toEqual({ ok: false, reason: 'method' })
+    expect(response.headers.get('cache-control')).toBe('no-store')
+  })
+
+  it('缺少 Key 时不发请求，直接标记未配置', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const response = await call(payload, { key: '' })
+    expect(await response.json()).toEqual({ ok: false, reason: 'not-configured' })
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('请求体超过 4 KB 时拒绝，且不读 body', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    let read = false
+    const response = await rawCall({
+      declared: '5000',
+      text: async () => {
+        read = true
+        return '{}'
+      },
+    })
+    expect(await response.json()).toEqual({ ok: false, reason: 'too-large' })
+    expect(read).toBe(false)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('请求体不是 JSON 时按坏请求处理', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await (await rawCall({ body: '{broken' })).json()).toEqual({
+      ok: false,
+      reason: 'bad-request',
+    })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('同一 IP 一分钟内超过 5 次时拒绝，上游只收到 5 次', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(() =>
+        Promise.resolve(
+          upstream(
+            JSON.stringify({ items: [{ sig: payload.items[0].sig, text: '上次 10 次。' }] }),
+          ),
+        ),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+    const ip = nextIp()
+    for (let index = 1; index <= 5; index += 1) {
+      const allowed = await rawCall({ body: JSON.stringify(payload), ip })
+      expect(((await allowed.json()) as { ok: boolean }).ok).toBe(true)
+    }
+    const blocked = await rawCall({ body: JSON.stringify(payload), ip })
+    expect(await blocked.json()).toEqual({ ok: false, reason: 'rate-limited' })
+    expect(fetchMock).toHaveBeenCalledTimes(5)
+  })
+
+  it('上游报错时只回 upstream，不泄漏地址与密钥', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('boom', { status: 500 })))
+    const body = await (await call(payload)).json()
+    expect(body).toEqual({ ok: false, reason: 'upstream' })
+    expectNoLeak(body)
+  })
+
+  it('上游超时时回 timeout，而不是悬挂', async () => {
+    vi.useFakeTimers()
+    // 超时分支会打一条日志，测试里不需要它出现在输出中
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        (_url: string, init: RequestInit) =>
+          new Promise((_resolve, reject) => {
+            init.signal?.addEventListener('abort', () => reject(new Error('aborted')))
+          }),
+      ),
+    )
+    const pending = call(payload)
+    await vi.advanceTimersByTimeAsync(12000)
+    expect(await (await pending).json()).toEqual({ ok: false, reason: 'timeout' })
+    quiet.mockRestore()
+    vi.useRealTimers()
+  })
+
+  it('理由超过 40 字被截断，短于 8 字被丢弃', async () => {
+    const long = `上次 10 次很稳，${'可以继续保持这个节奏不要急着加重量。'.repeat(3)}`
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        upstream(
+          JSON.stringify({
+            items: [
+              { sig: payload.items[0].sig, text: '10 次' },
+              { sig: payload.items[0].sig, text: long },
+            ],
+          }),
+        ),
+      ),
+    )
+    const body = (await (await call(payload)).json()) as {
+      items: Array<{ text: string }>
+    }
+    expect(body.items).toHaveLength(1)
+    expect(body.items[0].text.length).toBeLessThanOrEqual(40)
   })
 })

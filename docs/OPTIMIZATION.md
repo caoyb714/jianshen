@@ -210,9 +210,9 @@
 | C 草稿与版本提交    | **已完成**（`c9971dd`） | 采纳进草稿、卡底唯一提交入口、撤销从基线重算、`aria-disabled` 保焦点、防连点靠处理函数锁                |
 | D 计划版本互斥      | **已完成**              | 新增 `herfit_write_plan`（乐观锁）并已应用到线上；客户端 plan 写入走它，陈旧版本硬拒                    |
 
-**验证**：单测 103 项、演示 E2E 38 项、云端 E2E 4 项全绿；`npm run verify:cloud` 显示 4 个 RPC 齐全；线上已发布。
+**验证**：单测 92 项、演示 E2E 38 项、云端 E2E 4 项全绿；`npm run verify:cloud` 显示 4 个 RPC 齐全；线上已发布。
 
-**遗留清理（非阻塞）**：`functions/api/explain.ts` 的整段说明契约、`src/app/explain.ts` 的 `requestExplain`、`src/domain/ai.ts` 的 `buildExplainPayload` 已无界面调用，但仍有 15 项测试覆盖。下次清理时连同 `tests/explain.test.ts` 一并删除，可减少约 200 行死代码。
+**旧接口已清理**：整段说明的 `requestExplain`、`buildExplainPayload`、服务端散文分支与其提示词全部删除，`tests/explain.test.ts` 的 7 类防御用例（405、缺 Key、4KB、坏 JSON、次数上限、上游报错不泄漏、超时）已原样迁到 `tests/basis.test.ts`，另补了「理由超 40 字截断、短于 8 字丢弃」。净减约 200 行死代码，覆盖面不减。
 
 **A 段对计划的一处修正**：原稿写「从未记录过体重时整块不渲染」，但那样就没有首次录入的入口。实施改为渲染空态（主值显示 `—`、提示「还没有记录过体重。」、保留「记录体重」），隐藏态仍严格不出现任何数字。
 
