@@ -4,7 +4,7 @@
 
 ## 一句话状态
 
-HerFit（两人用的私人健康 PWA）已上线并可用，**8 个体验项里 7 个已完成**，只剩「计划内单日编辑」。记录删除的代码与测试已全部完成并提交，但**线上数据库迁移尚未应用**（Supabase 访问令牌失效，见下）。
+HerFit（两人用的私人健康 PWA）已上线并可用，**8 个体验项里 7 个已完成**，只剩「计划内单日编辑」。记录删除已上线（迁移已应用、前端已部署），下一步是产品向优化：档案补体重、AI 说明层重做、UI 细节打磨，见 `docs/OPTIMIZATION.md`。
 
 ## 位置与地址
 
@@ -31,19 +31,14 @@ HerFit（两人用的私人健康 PWA）已上线并可用，**8 个体验项里
 
 ## ⚠️ 唯一未完成的外部动作
 
-`20261118000100_delete_workout.sql` **还没在线上 Supabase 执行**。`.env.setup.local` 里的 `SUPABASE_ACCESS_TOKEN` 已失效，Management API 返回 `Invalid access token`。
+无。迁移已应用（`20261118000100_delete_workout.sql`），`npm run verify:cloud` 三个 RPC 齐全，前端已部署。
 
-在迁移落地前**不要部署前端**：`herfit_delete_workout` 不存在时，线上点删除会失败。
-
-补上新令牌后：
+重新部署只需：
 
 ```bash
-node scripts/apply-sql.mjs supabase/migrations/20261118000100_delete_workout.sql
-npm run verify:cloud   # 应显示三个 RPC 齐全
+npm run verify:cloud
 npm run deploy
 ```
-
-或直接在 Supabase SQL Editor 里粘贴该文件内容执行。
 
 ## 架构要点（改动前必读）
 
@@ -72,7 +67,7 @@ npm run deploy
 - `src/app/Store.tsx`、`src/pages/Me.tsx` 仍有 6 处裸 `localStorage`。隐私模式下不会白屏，但整站不可用（ErrorBoundary 兜底）。属存量问题。
 - `/api/explain` 只有进程内尽力限流（不持久化）。建议在 Cloudflare 控制台给该路径配 Rate Limiting 规则。
 - 代码只在本地 Git，**没有远端仓库**。硬盘坏了全没。
-- `.env.setup.local` 的 Supabase PAT 已失效，需要重新生成（Account → Access Tokens）。
+- `.env.setup.local` 里的 `SUPABASE_ACCESS_TOKEN` 是 2026-11-18 新建的永久令牌，只存在本机；如怀疑泄露，去 Supabase 账号的 Access Tokens 页面撤销重建。
 - `backups/v0.1`（569MB）与 `release/` 是历史交付物，未删除。
 
 ## 常用命令

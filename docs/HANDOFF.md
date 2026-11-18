@@ -7,7 +7,7 @@
 - 非作者删除返回 42501，message 为 `not the record author`；`src/cloud/repository.ts` 把它映射为 `CloudError('notOwner')`，避免被当成空间越权而清空整站数据。记录已不存在时按幂等成功处理。
 - 云端界面只对作者显示删除入口（比对快照里的 `createdBy` 与当前登录用户），服务端仍是真正的边界。
 - 验收：`npm test` 94/94；`npm run test:e2e` 38/38（演示模式，新增 2 项）；`HERFIT_TEST_CLOUD=1 npm run test:e2e` 4/4（新增「只有作者能删」）；`npm run build` 通过。
-- **迁移尚未应用到线上 Supabase**：`.env.setup.local` 里的 `SUPABASE_ACCESS_TOKEN` 已失效（Management API 返回 `Invalid access token`）。在拿到新令牌前不要部署前端——`herfit_delete_workout` 不存在时删除会失败。补上令牌后执行 `node scripts/apply-sql.mjs supabase/migrations/20261118000100_delete_workout.sql`，再用 `npm run verify:cloud` 确认三个 RPC 齐全。
+- 迁移已应用到线上 Supabase（`npm run verify:cloud` 显示三个 RPC 齐全），前端已部署到 <https://herfit-ec6.pages.dev>。令牌存放在 `.env.setup.local` 的 `SUPABASE_ACCESS_TOKEN`（永久令牌，只在本机）。
 
 ## v0.6 新进展（可选 AI 说明，方案 A）
 
