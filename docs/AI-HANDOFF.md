@@ -344,6 +344,8 @@ await day.click() // 打开单日编辑
 
 ## 11. 下一步计划
 
+> 2026-11-18 按代码复核过一轮：完整排序、证据与验收见 [`docs/ROADMAP.md`](ROADMAP.md)。下面保留原始条目，其中 P0-2 有两处要修正（见该节）。
+
 ### P0-1 补齐 AI 触发策略
 
 - 新增 `src/app/aiBasis.ts`：按 `planStamp + date` 记录「今日是否已自动拉过、手动次数、冷却截止」，存 localStorage。
@@ -354,8 +356,10 @@ await day.click() // 打开单日编辑
 ### P0-2 撤销跨刷新
 
 - 计划 payload 增加 `baselineVersion`；撤销时从 `plans` 找该版本取 days，套用剩余调整重算。
+- **修正一（2026-11-18 复核）**：只加 `baselineVersion` 不够。撤销时 `suggest()` 可能已经不再给出同一条建议，现有代码正是靠提交时的快照才撤得动（`src/pages/Training.tsx:242` 的注释）。必须把「本版采纳了哪几条」也写进 payload（`appliedAdjustments`），否则刷新后知道基线是哪一版、却不知道要撤哪一条。
+- **修正二**：`valid_payload` 的 plan 分支**不用改**。它只校验必需键、允许多余键（`supabase/migrations/20261116000200_stage3_profiles_plans.sql:158-205`），新字段会原样进 payload；本项**不需要数据库迁移**。
 - 验收：提交 v2 后刷新，「已生效 · v2」仍在；撤销仍生成 v3 且内容等于 v1 基线 + 剩余项。
-- 影响：`model.ts`（**只能是可选字段**）、`Training.tsx`、`valid_payload` 的 plan 分支、E2E。
+- 影响：`model.ts`（**只能是可选字段**）、`Training.tsx`、E2E。
 
 ### P1-1 多端并发 E2E
 
