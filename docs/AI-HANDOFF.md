@@ -93,7 +93,7 @@ git push github master --tags      # GitHub 私有远端：只推分支与标签
 git push origin --mirror           # 本机镜像：全量
 ```
 
-不要对 GitHub 用 `--mirror`：它会把 `refs/remotes/origin/*` 一起推上去，在远端留下多余引用（本项目已清理过一次）。
+不要对 GitHub 用 `--mirror`：它会把 `refs/remotes/origin/*` 一起推上去，在远端留下多余引用；而且 `--mirror` 会把 `remote.github.mirror=true` **写进本地 config**，之后对该远端的普通 `git push` 也会变成全镜像。发现多出引用时，先 `git config --unset remote.github.mirror`，再 `git push github :refs/remotes/origin/master` 删掉。
 
 ### 3.2 密钥与账号（都不在仓库里）
 
