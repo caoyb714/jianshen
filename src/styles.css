@@ -3068,3 +3068,60 @@ legend {
     min-height: 44px;
   }
 }
+
+
+/* 今天怎么练：精力与时间只影响当天 */
+.tune-panel .tune-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 10px 0;
+}
+.tune-row .tune-label {
+  font-size: 12px;
+  color: var(--muted);
+  min-width: 42px;
+}
+/* 档案里的逐天勾选 */
+.day-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.day-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.day-chip input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+}
+.day-chip.active {
+  border-color: #a96680;
+  color: #8d4a61;
+  background: #fbf1f4;
+}
+/* 单日编辑里的目标次数 */
+.target-editor {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+}
+.target-editor input {
+  width: 54px;
+  padding: 5px 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+  text-align: center;
+}

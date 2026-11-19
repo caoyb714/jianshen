@@ -37,7 +37,7 @@
 | 代码远端     | `github` → https://github.com/caoyb714/jianshen（私有，master + 标签）；`origin` → `D:\backups\herfit.git`（本机镜像） |
 | 技术栈       | React 19 + TypeScript + Vite；Cloudflare Pages + Functions；Supabase（Postgres + Auth）                                |
 | 运行模式     | 云模式（线上）/ 演示模式（本机 localStorage），共用一套 Store 接口                                                     |
-| 单测         | 105 项，7 个文件                                                                                                       |
+| 单测         | 111 项，7 个文件                                                                                                       |
 | 演示 E2E     | 40 项（桌面 + 移动双视口，实际执行 80 次）                                                                             |
 | 云端 E2E     | 4 项（PGlite 起真实 schema）                                                                                           |
 | 最近一次全绿 | 2026-11-19 16:20                                                                                                       |
@@ -58,6 +58,7 @@
 | 计划写入乐观锁     | `herfit_write_plan`，陈旧版本返回 40001                           |
 | 替代动作无向并集   | `alternativesFor()`：同模式 + 同剂量类型 + 器械可用，作者顺序优先 |
 | AI 代理鉴权        | `/api/explain` 要求 Bearer token，交 Supabase 判定，缺失即拒绝    |
+| 计划定制           | 逐天勾选训练日、当天可用时长、单动作目标次数、今日精力分级        |
 
 **这一轮把测试补齐了**：多端并发（陈旧计划被 40001 拒绝）、成长页与记录页的体重隐藏态、键盘采纳与 Esc 取消、触屏 44px 热区，都有 E2E 覆盖。
 
@@ -72,8 +73,8 @@
 ```bash
 npm ci                 # 安装依赖
 npm run check          # tsc -b，改完必跑
-npm test               # vitest，105 项，约 3 秒
-npm run test:e2e       # Playwright 演示模式，23 个用例（双视口），约 40 秒
+npm test               # vitest，111 项，约 3 秒
+npm run test:e2e       # Playwright 演示模式，26 个用例（双视口），约 40 秒
 HERFIT_TEST_CLOUD=1 npm run test:e2e   # 云端模式 3 个用例（双视口），约 25 秒
 npm run dev            # http://127.0.0.1:5173
 npm run verify:cloud   # 线上 8 张表 + 4 个 RPC 自检
@@ -171,7 +172,7 @@ dataSchema = {
 }
 ```
 
-档案字段：昵称、年龄 18–100、身高 100–230、经验三档、日常活动三档、目标三档、每周 1–7 天、单次 10–90 分钟、器械（徒手/哑铃/弹力带至少一项）、哑铃重量、弹力带档位、身体限制 ≤500 字、限制确认布尔。
+档案字段：昵称、年龄 18–100、身高 100–230、经验三档、日常活动三档、目标三档、每周 1–7 天、单次 10–90 分钟、器械（徒手/哑铃/弹力带至少一项）、哑铃重量、弹力带档位、身体限制 ≤500 字、限制确认布尔、可选的自选训练日 `trainingDays`（0=周一）。
 
 **没有体重字段，这是刻意的。**
 
@@ -208,7 +209,7 @@ dataSchema = {
 `generatePlan({ age, experience, weeklyDays, sessionMinutes, equipment, restrictions, restrictionsConfirmed })`：
 
 1. 限制未确认 → 返回 `{ ok: false, message }`，不生成。
-2. 按每周天数分配训练日与恢复/休息日。
+2. 排期：档案里勾了 `trainingDays` 就用勾选的那几天；没勾才按每周天数自动分配。
 3. 每天按动作模式覆盖（蹲 / 髋铰链 / 推 / 拉 / 核心）挑动作，控制总时长。
 4. 输出 7 天，含热身、槽位、预计时长、备注。
 
@@ -228,6 +229,11 @@ dataSchema = {
 | 6    | 其他                             | `hold`（进展正常）                                  |
 
 幅度常量 `LOAD_STEP_KG = 1`。**AI 不能改这个数字**，只能解释。
+
+### 6.2.1 当天的两种微调
+
+- `fitDayToBudget(day, minutes)`：按今天的可用时长裁剪动作。先去放松，再从末尾去主要动作，**至少保留一个主要动作**；时长重算。
+- `adjustDayForReadiness(day, readiness)`：`high`/`ok` 不动；`low` 每个动作少一组；`unwell` 改成恢复日（只留放松动作）。两者都只改当天，并生成新版本。
 
 ### 6.3 体重口径
 
@@ -299,8 +305,8 @@ dataSchema = {
 
 | 文件                         | 数量 | 覆盖                                                                                                                   |
 | ---------------------------- | ---- | ---------------------------------------------------------------------------------------------------------------------- |
-| `tests/engine.test.ts`       | 39   | 生成、渐进负荷六分支、安全边界、降载周、训练周序号                                                                     |
-| `tests/domain.test.ts`       | 27   | 派生统计、体重取值、周报、计划可追溯字段、替代动作无向并集                                                             |
+| `tests/engine.test.ts`       | 42   | 生成、渐进负荷六分支、安全边界、降载周、训练周序号                                                                     |
+| `tests/domain.test.ts`       | 30   | 派生统计、体重取值、周报、计划可追溯字段、替代动作无向并集                                                             |
 | `tests/basis.test.ts`        | 18   | 条目化接口：白名单、数字校验、截断、坏 JSON、405、缺 Key、4KB、限流、上游错误不泄漏、超时、重复签名、超 6 条、鉴权 401 |
 | `tests/cloud-db.test.ts`     | 10   | PGlite 真实 schema：RLS、两档案、计划唯一、乐观锁、删除鉴权                                                            |
 | `tests/ai.test.ts`           | 5    | 载荷封闭集合、控制字符、6 条上限、近 7 天统计                                                                          |

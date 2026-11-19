@@ -30,8 +30,11 @@ import {
   applyAdjustments,
   estimateMinutes,
   generatePlan,
+  adjustDayForReadiness,
+  fitDayToBudget,
   targetFor,
   trainingWeekNumber,
+  type Readiness,
   type EngineResult,
   type Suggestion,
 } from '../domain/engine'
@@ -40,10 +43,21 @@ import { alternativesFor, getExercise, LIBRARY_REVIEWED } from '../domain/exerci
 import { weekdayIndex } from '../domain/dates'
 import { AI_CONSENT_KEY, buildBasisPayload, formatTarget, type BasisItem } from '../domain/ai'
 import type { PlanDay, PlanSlot, TrainingPlan } from '../domain/model'
+import { emptyHabit } from '../domain/seed'
 
 const WEEK_LABELS = ['一', '二', '三', '四', '五', '六', '日']
 /** 触发策略的落盘键：换版本或换天会自动重置，不需要手动清理 */
 const BASIS_GATE_KEY = 'herfit.aiBasis.v1'
+const READINESS_OPTIONS: Array<{ value: Readiness; label: string }> = [
+  { value: 'high', label: '充沛' },
+  { value: 'ok', label: '一般' },
+  { value: 'low', label: '有点累' },
+  { value: 'unwell', label: '很不舒服' },
+]
+/** 今天可用的时间档位，只影响当天动作数量 */
+const MINUTE_CHOICES = [15, 30, 45, 60]
+const clampNumber = (value: number, min: number, max: number) =>
+  Math.min(max, Math.max(min, Math.round(Number.isFinite(value) ? value : min)))
 
 /** 建议条目的理由有四种可见状态；失败只降级理由位，不影响幅度与采纳。 */
 type BasisState = { state: 'idle' | 'loading' | 'ok' | 'failed'; texts: Record<string, string> }
@@ -75,6 +89,7 @@ export default function Training() {
   const autoGuard = useRef(false)
   const todayIndex = weekdayIndex(today)
   const todayPlan = plan?.days[todayIndex]
+  const todayHabit = active.habits.find((row) => row.date === today) ?? emptyHabit(active.id, today)
 
   // 「已生效」不再只存在内存里：计划自己记着基线版本与已应用的条目，刷新后照样能显示与撤销
   const appliedRows = plan?.appliedAdjustments ?? []
@@ -112,6 +127,54 @@ export default function Training() {
     )
   }, [active.plan, active.workouts])
 
+  /** 把某一天替换掉并生成新版本，原因写进 notes */
+  async function commitDay(nextDay: PlanDay, note: string, message: string) {
+    if (!plan || pending) return
+    const days = plan.days.map((day) => (day.index === nextDay.index ? nextDay : day))
+    const next: TrainingPlan = {
+      ...plan,
+      id: crypto.randomUUID(),
+      version: plan.version + 1,
+      generatedAt: new Date().toISOString(),
+      confirmedAt: new Date().toISOString(),
+      status: 'active',
+      days,
+      editedBy: cloud ? cloud.viewerId : 'local',
+      notes: [note, '旧版本已归档保留。'],
+    }
+    setPending('day')
+    const saved = await commit({ kind: 'plan', value: next })
+    setPending(null)
+    if (saved) notify(message)
+  }
+
+  /** 记录今天的精力；累或不适时同时调整当天安排 */
+  async function recordReadiness(next: Readiness) {
+    if (!plan || !todayPlan || pending) return
+    // 先落这条记录：即使后面不改计划，也留下「今天状态如何」
+    await commit({ kind: 'habit', value: { ...todayHabit, readiness: next } })
+    const adjusted = adjustDayForReadiness(todayPlan, next)
+    if (adjusted === todayPlan) return
+    const label = READINESS_OPTIONS.find((option) => option.value === next)?.label ?? ''
+    await commitDay(
+      adjusted,
+      `今天精力「${label}」，已调整今天的安排。`,
+      '今天的安排已按状态调整',
+    )
+  }
+
+  /** 今天只有这么多时间：按预算裁剪动作，至少留一个主要动作 */
+  async function applyTodayMinutes(minutes: number) {
+    if (!plan || !todayPlan || pending) return
+    const adjusted = fitDayToBudget(todayPlan, minutes)
+    if (adjusted === todayPlan) return
+    await commitDay(
+      adjusted,
+      `今天只安排了 ${minutes} 分钟，已按预算取舍动作。`,
+      `已压缩到约 ${adjusted.estimatedMinutes} 分钟`,
+    )
+  }
+
   /** 打开某一天的编辑：复制一份，取消时不会污染正在使用的计划 */
   function openDay(day: PlanDay) {
     if (dayBusy) return
@@ -129,6 +192,38 @@ export default function Training() {
             slots: current.slots.map((slot, i) =>
               i === index ? { ...slot, sets: Math.min(10, Math.max(1, slot.sets + delta)) } : slot,
             ),
+          }
+        : current,
+    )
+  }
+
+  /** 改目标次数/秒数：上下限自动纠正顺序，避免出现 max < min 的非法计划 */
+  function changeTarget(
+    index: number,
+    patch: { min?: number; max?: number; seconds?: number },
+  ) {
+    setEditDay((current) =>
+      current
+        ? {
+            ...current,
+            slots: current.slots.map((slot, i) => {
+              if (i !== index) return slot
+              const target = { ...slot.target }
+              if (target.type === 'reps') {
+                const min = clampNumber(patch.min ?? target.min, 1, 50)
+                const max = clampNumber(patch.max ?? target.max, 1, 50)
+                target.min = Math.min(min, max)
+                target.max = Math.max(min, max)
+              } else if (target.type === 'hold') {
+                target.seconds = clampNumber(patch.seconds ?? target.seconds, 5, 300)
+              } else {
+                const min = clampNumber(patch.min ?? target.minMinutes, 1, 90)
+                const max = clampNumber(patch.max ?? target.maxMinutes, 1, 90)
+                target.minMinutes = Math.min(min, max)
+                target.maxMinutes = Math.max(min, max)
+              }
+              return { ...slot, target }
+            }),
           }
         : current,
     )
@@ -399,6 +494,7 @@ export default function Training() {
       equipment: profile.equipment,
       restrictions: profile.restrictions,
       restrictionsConfirmed: profile.restrictionsConfirmed,
+      trainingDays: profile.trainingDays,
       // 第几周从真实训练记录算，避免「同一天重生成四次」被误判成降载周
       weekNumber: trainingWeekNumber(active.workouts, today),
     })
@@ -497,6 +593,46 @@ export default function Training() {
           </Link>
         </div>
       )}
+
+      {plan && !draft && todayPlan && todayPlan.kind === '训练' ? (
+        <section className="panel tune-panel">
+          <div className="section-heading">
+            <h2>今天怎么练</h2>
+            <span className="soft-label">只影响今天</span>
+          </div>
+          <div className="tune-row">
+            <span className="tune-label">精力</span>
+            <div className="segmented">
+              {READINESS_OPTIONS.map((option) => (
+                <button
+                  key={option.value}
+                  aria-pressed={todayHabit.readiness === option.value}
+                  aria-disabled={pending !== null}
+                  onClick={() => void recordReadiness(option.value)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="tune-row">
+            <span className="tune-label">今天有</span>
+            <div className="segmented">
+              {MINUTE_CHOICES.map((minutes) => (
+                <button
+                  key={minutes}
+                  aria-pressed={todayPlan.estimatedMinutes === minutes}
+                  aria-disabled={pending !== null}
+                  onClick={() => void applyTodayMinutes(minutes)}
+                >
+                  {minutes} 分钟
+                </button>
+              ))}
+            </div>
+          </div>
+          <p className="small-muted">调整会生成新版本，历史保留；今天不做也不扣分。</p>
+        </section>
+      ) : null}
 
       {/* 规则给幅度、AI 写理由：两块合成一张卡，避免同屏出现两份互相打架的建议 */}
       {plan && !draft && adjustRows.length > 0 ? (
@@ -726,6 +862,64 @@ export default function Training() {
                       >
                         +
                       </button>
+                    </div>
+                    <div className="target-editor">
+                      {slot.target.type === 'reps' ? (
+                        <>
+                          <span className="small-muted">次数</span>
+                          <input
+                            type="number"
+                            aria-label={`${exercise?.name ?? '动作'}的目标次数下限`}
+                            value={slot.target.min}
+                            onChange={(event) =>
+                              changeTarget(index, { min: Number(event.target.value) })
+                            }
+                          />
+                          <span aria-hidden="true">–</span>
+                          <input
+                            type="number"
+                            aria-label={`${exercise?.name ?? '动作'}的目标次数上限`}
+                            value={slot.target.max}
+                            onChange={(event) =>
+                              changeTarget(index, { max: Number(event.target.value) })
+                            }
+                          />
+                        </>
+                      ) : slot.target.type === 'hold' ? (
+                        <>
+                          <span className="small-muted">保持</span>
+                          <input
+                            type="number"
+                            aria-label={`${exercise?.name ?? '动作'}的目标秒数`}
+                            value={slot.target.seconds}
+                            onChange={(event) =>
+                              changeTarget(index, { seconds: Number(event.target.value) })
+                            }
+                          />
+                          <span className="small-muted">秒</span>
+                        </>
+                      ) : (
+                        <>
+                          <span className="small-muted">时长</span>
+                          <input
+                            type="number"
+                            aria-label={`${exercise?.name ?? '动作'}的目标分钟下限`}
+                            value={slot.target.minMinutes}
+                            onChange={(event) =>
+                              changeTarget(index, { min: Number(event.target.value) })
+                            }
+                          />
+                          <span aria-hidden="true">–</span>
+                          <input
+                            type="number"
+                            aria-label={`${exercise?.name ?? '动作'}的目标分钟上限`}
+                            value={slot.target.maxMinutes}
+                            onChange={(event) =>
+                              changeTarget(index, { max: Number(event.target.value) })
+                            }
+                          />
+                        </>
+                      )}
                     </div>
                     {exercise && alternativesFor(slot.exerciseId, profile.equipment).length > 0 ? (
                       <label className="day-slot-swap">

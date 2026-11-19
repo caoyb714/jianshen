@@ -464,3 +464,60 @@ test('interactive controls meet the 44px touch minimum', async ({ page }, testIn
   const box = await row.getByRole('button', { name: '删除这条记录' }).boundingBox()
   expect(box?.height ?? 0).toBeGreaterThanOrEqual(44)
 })
+
+test('picked training days shape the generated week', async ({ page }) => {
+  await page.goto('/me')
+  await page.getByRole('button', { name: '编辑身体档案' }).click()
+  await page.getByLabel('每周可安排天数').fill('3')
+  await page.getByLabel('周一').check()
+  await page.getByLabel('周三').check()
+  await page.getByLabel('我已检查并确认上述身体限制').check()
+  await page.getByRole('button', { name: '保存本机档案' }).click()
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+
+  await page.goto('/training')
+  await page.getByRole('button', { name: /生成我的计划|重新生成计划/ }).click()
+  await page.getByRole('button', { name: '确认使用此计划' }).click()
+
+  await expect(page.getByRole('button', { name: '编辑周一的安排' })).toContainText('分')
+  await expect(page.getByRole('button', { name: '编辑周三的安排' })).toContainText('分')
+  await expect(page.getByRole('button', { name: '编辑周二的安排' })).toContainText('休息')
+})
+
+test('today readiness and available minutes reshape only today', async ({ page }) => {
+  await ensurePlan(page)
+  const tune = page.locator('.tune-panel')
+  await expect(tune).toBeVisible()
+  const today = page.locator('.week-plan > button.today')
+  const before = await today.innerText()
+
+  // 时间预算：压缩后时长变短，版本 +1
+  await tune.getByRole('button', { name: '15 分钟' }).click()
+  await expect(page.getByText(/v2 · 生成于/)).toBeVisible()
+  const after = await today.innerText()
+  expect(after).not.toBe(before)
+
+  // 精力：很不舒服 → 改成恢复日，再生成一版
+  await tune.getByRole('button', { name: '很不舒服' }).click()
+  await expect(page.getByText(/v3 · 生成于/)).toBeVisible()
+  await expect(today).toContainText('恢复')
+  await expect(tune).toHaveCount(0)
+})
+
+test('a single exercise target can be edited', async ({ page }) => {
+  await ensurePlan(page)
+  await page.locator('.week-plan > button').filter({ hasText: '分' }).first().click()
+  const dialog = page.getByRole('dialog')
+  const target = dialog.getByLabel(/目标次数上限/).first()
+  await target.fill('20')
+  await dialog.getByRole('button', { name: /保存为 v2/ }).click()
+  await expect(page.getByText(/v2 · 生成于/)).toBeVisible()
+
+  await page.locator('.week-plan > button').filter({ hasText: '分' }).first().click()
+  await expect(
+    page
+      .getByRole('dialog')
+      .getByLabel(/目标次数上限/)
+      .first(),
+  ).toHaveValue('20')
+})

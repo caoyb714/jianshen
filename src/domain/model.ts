@@ -25,6 +25,8 @@ export const profileSchema = z.object({
   activity: z.enum(['大多坐着', '经常走动', '体力活动较多']),
   goal: z.enum(['养成运动习惯', '提升力量与体能', '改善日常状态']),
   weeklyDays: number(1, 7).int(),
+  /** 自己勾选的训练日（0=周一）。为空表示沿用引擎按天数自动排 */
+  trainingDays: z.array(z.number().int().min(0).max(6)).max(7).optional(),
   sessionMinutes: number(10, 90).int(),
   equipment: z.array(z.enum(['徒手', '哑铃', '弹力带'])).min(1, '至少选择一种器械'),
   dumbbell: z.string().max(50),
@@ -39,6 +41,8 @@ export const habitSchema = z.object({
   water: number(0, 10000),
   sleep: number(0, 24).nullable(),
   energy: number(1, 5).int().nullable(),
+  /** 今天的精力：只影响当天安排，不参与任何评分 */
+  readiness: z.enum(['high', 'ok', 'low', 'unwell']).nullable().optional(),
   meals: z.boolean(),
   protein: z.boolean(),
   plants: z.boolean(),

@@ -13,7 +13,7 @@ import { loadData, saveData, STORAGE_KEY } from '../src/domain/repository'
 import { makeSeed, PROFILE_A } from '../src/domain/seed'
 import { applyChange } from '../src/domain/change'
 import { generatePlan } from '../src/domain/engine'
-import { trainingPlanSchema } from '../src/domain/model'
+import { habitSchema, profileSchema, trainingPlanSchema } from '../src/domain/model'
 import { summarize, weeklyReview, latestWeights } from '../src/domain/stats'
 
 const source = (path: string) => readFileSync(new URL(`../src/${path}`, import.meta.url), 'utf8')
@@ -372,5 +372,49 @@ describe('替代动作', () => {
     expect(bandOnly).not.toContain('db-curl')
     // 只有哑铃时不返回弹力带动作：给了也做不了
     expect(alternativesFor('db-curl', ['哑铃'])).toEqual([])
+  })
+})
+
+describe('定制化字段的兼容性', () => {
+  const baseProfile = {
+    name: '小美',
+    age: 28,
+    height: 165,
+    experience: '偶尔运动' as const,
+    activity: '大多坐着' as const,
+    goal: '养成运动习惯' as const,
+    weeklyDays: 3,
+    sessionMinutes: 30,
+    equipment: ['徒手'] as const,
+    dumbbell: '',
+    band: '',
+    restrictions: '',
+    restrictionsConfirmed: true,
+  }
+
+  it('老档案没有勾选训练日也能解析', () => {
+    expect(profileSchema.safeParse(baseProfile).success).toBe(true)
+  })
+
+  it('勾选的训练日会写入档案', () => {
+    const parsed = profileSchema.safeParse({ ...baseProfile, trainingDays: [1, 3] })
+    expect(parsed.success).toBe(true)
+    if (parsed.success) expect(parsed.data.trainingDays).toEqual([1, 3])
+  })
+
+  it('老习惯没有精力字段也能解析，新值合法', () => {
+    const habit = {
+      profileId: PROFILE_A,
+      date: '2026-11-19',
+      water: 500,
+      sleep: 7,
+      energy: 3,
+      meals: true,
+      protein: false,
+      plants: true,
+    }
+    expect(habitSchema.safeParse(habit).success).toBe(true)
+    expect(habitSchema.safeParse({ ...habit, readiness: 'low' }).success).toBe(true)
+    expect(habitSchema.safeParse({ ...habit, readiness: 'exhausted' }).success).toBe(false)
   })
 })

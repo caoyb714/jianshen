@@ -6,6 +6,8 @@ import {
   isDeloadWeek,
   setsFor,
   trainingWeekNumber,
+  fitDayToBudget,
+  adjustDayForReadiness,
   suggest,
   targetFor,
   type EngineInput,
@@ -400,5 +402,37 @@ describe('计划调整', () => {
       },
     ])
     expect(next).toEqual(days)
+  })
+})
+
+describe('定制化', () => {
+  it('勾选的训练日优先于按天数自动排', () => {
+    const result = plan({ trainingDays: [1, 3] })
+    const training = result.days.filter((day) => day.kind === '训练').map((day) => day.index)
+    expect(training).toEqual([1, 3])
+    expect(result.days.filter((day) => day.kind !== '训练')).toHaveLength(5)
+  })
+
+  it('时间预算只裁动作，不会把训练日裁成空', () => {
+    const source = plan().days.find((day) => day.kind === '训练')!
+    const trimmed = fitDayToBudget(source, 10)
+    expect(trimmed.slots.length).toBeLessThanOrEqual(source.slots.length)
+    expect(trimmed.slots.filter((slot) => slot.role === '主要').length).toBeGreaterThanOrEqual(1)
+    expect(trimmed.estimatedMinutes).toBeLessThanOrEqual(source.estimatedMinutes)
+  })
+
+  it('精力偏低时每个动作少一组，很不舒服时改成恢复日', () => {
+    const source = plan().days.find((day) => day.kind === '训练')!
+    const high = adjustDayForReadiness(source, 'high')
+    expect(high).toBe(source)
+
+    const low = adjustDayForReadiness(source, 'low')
+    expect(low.slots[0].sets).toBe(Math.max(1, source.slots[0].sets - 1))
+    expect(low.note).toContain('少做一组')
+
+    const unwell = adjustDayForReadiness(source, 'unwell')
+    expect(unwell.kind).toBe('恢复')
+    expect(unwell.slots.every((slot) => slot.role === '放松')).toBe(true)
+    expect(unwell.note).toContain('恢复日')
   })
 })

@@ -31,6 +31,8 @@ export type EngineInput = {
   equipment: Equipment[]
   restrictions: string
   restrictionsConfirmed: boolean
+  /** 自己勾选的训练日（0=周一）；为空则按 weeklyDays 自动排 */
+  trainingDays?: number[]
   /**
    * 当前是训练的第几周，从 1 开始。由调用方按真实训练历史算（见 trainingWeekNumber），
    * 不能用「第几次重新生成」冒充，否则同一天重生成四次就会误判为降载周。
@@ -179,9 +181,10 @@ export function generatePlan(input: EngineInput): EngineResult {
     notes.push('单次时间较短，计划只安排核心动作，热身与放松请另留时间。')
   }
 
-  const schedule = WEEK_SCHEDULE[Math.min(7, Math.max(1, Math.round(input.weeklyDays)))] ?? [
-    0, 2, 4,
-  ]
+  const picked = (input.trainingDays ?? []).filter((day) => day >= 0 && day <= 6)
+  const schedule = picked.length
+    ? [...new Set(picked)].sort((a, b) => a - b)
+    : (WEEK_SCHEDULE[Math.min(7, Math.max(1, Math.round(input.weeklyDays)))] ?? [0, 2, 4])
   const focuses = splitFor(schedule.length)
   const warmupSeconds = input.sessionMinutes >= 25 ? 300 : 180
   const budgetSeconds = Math.max(300, input.sessionMinutes * 60 - warmupSeconds)
@@ -446,6 +449,60 @@ export function suggest(session: SuggestInput): Suggestion {
   }
 
   return { kind: 'hold', reason: '目前进展正常，保持当前负荷，把动作质量做扎实。' }
+}
+
+/** 今天的精力，只影响当天安排，不参与任何评分 */
+export type Readiness = 'high' | 'ok' | 'low' | 'unwell'
+
+/**
+ * 把某一天压进时间预算。
+ *
+ * 先去掉放松动作，再从末尾去掉主要动作，且至少保留一个主要动作——
+ * 一个动作都没有的「训练日」只会让用户困惑。返回新的 day，不改原对象。
+ */
+export function fitDayToBudget(day: PlanDay, minutes: number): PlanDay {
+  if (day.kind !== '训练' || day.slots.length === 0) return day
+  const budget = Math.max(5, Math.round(minutes))
+  const slots = [...day.slots]
+  while (slots.length > 1 && estimateMinutes(slots) > budget) {
+    const relaxAt = slots.map((slot) => slot.role).lastIndexOf('放松')
+    if (relaxAt >= 0) {
+      slots.splice(relaxAt, 1)
+      continue
+    }
+    if (slots.filter((slot) => slot.role === '主要').length <= 1) break
+    slots.pop()
+  }
+  return { ...day, slots, estimatedMinutes: estimateMinutes(slots) }
+}
+
+/**
+ * 按今天的精力调整当天安排。
+ *
+ * 充沛与一般不动；有点累减一组；很不舒服改成恢复日。
+ * 只改这一天，且一定生成新版本——历史记录不因今天的状态被改写。
+ */
+export function adjustDayForReadiness(day: PlanDay, readiness: Readiness): PlanDay {
+  if (day.kind !== '训练') return day
+  if (readiness === 'high' || readiness === 'ok') return day
+  if (readiness === 'low') {
+    const slots = day.slots.map((slot) => ({ ...slot, sets: Math.max(1, slot.sets - 1) }))
+    return {
+      ...day,
+      slots,
+      estimatedMinutes: estimateMinutes(slots),
+      note: '今天精力偏低，每个动作少做一组，动作质量优先。',
+    }
+  }
+  const relax = day.slots.filter((slot) => slot.role === '放松')
+  return {
+    ...day,
+    kind: '恢复',
+    focus: '主动恢复',
+    slots: relax,
+    estimatedMinutes: relax.length ? estimateMinutes(relax, 0) : 0,
+    note: '今天状态不好，改成恢复日。休息也是训练的一部分，不会中断你的进度。',
+  }
 }
 
 /** 每 4 周安排一周降载：组数减一，负荷降 10% */

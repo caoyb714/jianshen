@@ -35,6 +35,7 @@ export function ProfileEditor({
     register,
     handleSubmit,
     setValue,
+    watch,
     formState: { errors, isSubmitting },
   } = useForm<Profile>({
     resolver: zodResolver(profileSchema),
@@ -48,6 +49,7 @@ export function ProfileEditor({
     },
   })
   const [saveFailed, setSaveFailed] = useState(false)
+  const trainingDays = watch('trainingDays') ?? []
   const submit = async (profile: Profile) => setSaveFailed(!(await onSubmit(profile)))
   return (
     <form onSubmit={handleSubmit(submit)} noValidate>
@@ -107,6 +109,33 @@ export function ProfileEditor({
             max="90"
             {...register('sessionMinutes', { valueAsNumber: true })}
           />
+        </Field>
+        <Field label="具体练哪几天（不选则由系统按天数安排）">
+          <div className="day-picker">
+            {['一', '二', '三', '四', '五', '六', '日'].map((label, index) => (
+              <label
+                key={label}
+                className={trainingDays.includes(index) ? 'day-chip active' : 'day-chip'}
+              >
+                <input
+                  type="checkbox"
+                  aria-label={`周${label}`}
+                  checked={trainingDays.includes(index)}
+                  onChange={(event) => {
+                    const next = event.target.checked
+                      ? [...trainingDays, index].sort((a, b) => a - b)
+                      : trainingDays.filter((day) => day !== index)
+                    setValue('trainingDays', next, { shouldValidate: true })
+                    // 天数与勾选保持一致，避免两个字段互相矛盾
+                    setValue('weeklyDays', Math.max(1, next.length || 1), {
+                      shouldValidate: true,
+                    })
+                  }}
+                />
+                周{label}
+              </label>
+            ))}
+          </div>
         </Field>
       </div>
       <fieldset>
