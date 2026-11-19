@@ -11,32 +11,16 @@
  * 令牌只从本地文件读取，不打印、不写入日志、不进入 Git。
  */
 
-import { readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { writeFileSync, existsSync } from 'node:fs'
+import { readSetupEnv } from './setup-env.mjs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-const setupPath = join(root, '.env.setup.local')
 const envPath = join(root, '.env.local')
 const API = 'https://api.supabase.com/v1'
 const DRY = process.argv.includes('--dry-run')
 const PROJECT_NAME = 'herfit'
-
-function readEnvFile(path) {
-  if (!existsSync(path)) return null
-  const env = {}
-  for (const line of readFileSync(path, 'utf8').split(/\r?\n/)) {
-    const trimmed = line.trim()
-    if (!trimmed || trimmed.startsWith('#')) continue
-    const index = trimmed.indexOf('=')
-    if (index === -1) continue
-    env[trimmed.slice(0, index).trim()] = trimmed
-      .slice(index + 1)
-      .trim()
-      .replace(/^["']|["']$/g, '')
-  }
-  return env
-}
 
 function die(message, detail) {
   console.error(`\n✗ ${message}`)
@@ -44,11 +28,11 @@ function die(message, detail) {
   process.exit(1)
 }
 
-const setup = readEnvFile(setupPath)
+const setup = readSetupEnv().env
 if (!setup) {
   die(
-    '找不到 .env.setup.local',
-    '需要 SUPABASE_ACCESS_TOKEN、SUPABASE_DB_PASSWORD，可选 SUPABASE_REGION / SUPABASE_ORG_ID',
+    '找不到 setup 环境文件',
+    '放在 %USERPROFILE%\\.herfit\\.env.setup.local（或旧位置的仓库目录），需要 SUPABASE_ACCESS_TOKEN、SUPABASE_DB_PASSWORD，可选 SUPABASE_REGION / SUPABASE_ORG_ID',
   )
 }
 const token = setup.SUPABASE_ACCESS_TOKEN

@@ -9,6 +9,7 @@
  */
 
 import { readFileSync, existsSync } from 'node:fs'
+import { readSetupEnv } from './setup-env.mjs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
@@ -133,16 +134,10 @@ async function main() {
     process.exit(1)
   }
 
-  const setupPath = join(root, '.env.setup.local')
-  const env = Object.fromEntries(
-    readFileSync(setupPath, 'utf8')
-      .split(/\r?\n/)
-      .filter((line) => line && !line.startsWith('#'))
-      .map((line) => {
-        const index = line.indexOf('=')
-        return [line.slice(0, index).trim(), line.slice(index + 1).trim()]
-      }),
-  )
+  const loaded = readSetupEnv()
+  if (!loaded.env)
+    throw new Error('找不到 setup 环境文件（%USERPROFILE%\\.herfit\\.env.setup.local）')
+  const env = loaded.env
   const token = env.SUPABASE_ACCESS_TOKEN
   const ref = process.env.HERFIT_PROJECT_REF || env.SUPABASE_PROJECT_REF
   if (!token) throw new Error('缺少 SUPABASE_ACCESS_TOKEN')

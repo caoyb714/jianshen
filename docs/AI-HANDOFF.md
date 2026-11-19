@@ -107,6 +107,8 @@ git push origin --mirror           # 本机镜像：全量
 
 `npm run provision` 建账号与空间；`npm run deploy` 读 `.env.local` 里的 Cloudflare 凭据。
 
+**setup 环境文件的查找顺序**（`scripts/setup-env.mjs`）：`HERFIT_SETUP_ENV` 显式指定 → `%USERPROFILE%\.herfit\.env.setup.local` → 仓库目录旧位置（会打印警告）。`.env.local` 仍留在仓库，因为它只有项目地址与 publishable key，不含密钥。
+
 ### 3.3 常见失败
 
 | 现象                                                     | 原因                                                                                                                                             |
@@ -367,24 +369,20 @@ await day.click() // 打开单日编辑
 ## 11. 剩余工作
 
 > `docs/ROADMAP.md` 是 2026-11-18 写下的完整计划（带代码证据与验收口径），可当背景读。
-> 截至 2026-11-19，其中 P0-1 远端、P0-2 计划可追溯、P0-3 触发策略与鉴权、P1-1 替代关系、P1-2 降载周，以及多端并发、成长页隐藏态、无障碍补测都已完成。实际状态以第 10 节为准。
+> 截至 2026-11-19，其中 P0-1 远端、P0-2 计划可追溯、P0-3 触发策略与鉴权、P1-1 替代关系、P1-2 降载周、多端并发、成长页隐藏态、无障碍补测都已完成；密钥也已移出仓库目录。实际状态以第 10 节为准。
 
-只剩两件，都不阻塞使用。
+只剩一件，不阻塞使用。
 
-### 1. iOS 与真实模型抽查（P2，人工）
+### iOS 与真实模型抽查（P2，人工）
 
 iOS Safari：安装到主屏、safe-area、`#showWeight` 的滚动定位。
 真实 Key：连续 10 次生成理由，检查是否越界给数字、是否出现医疗建议、是否守住 40 字。
 
 **验收**：留一份手测记录；异常项记进 issue。
 
-### 2. 密钥移出仓库目录（P2，安全卫生）
+### 顺带记一笔：`backups/` 占 569 MB
 
-`.env.setup.local` 里有真实的 `DEEPSEEK_API_KEY`、Supabase service token 与 DB 密码。已被 `.gitignore` 排除、未进版本库，但文件就在项目目录里，整目录打包或共享时会一起带走。
-
-**做法**：移到 `%USERPROFILE%\.herfit\`，让 `provision` / `deploy` 从该路径或系统环境变量读取。
-
-**验收**：仓库目录内 `grep -r "sk-"` 无命中；`npm run verify:cloud` 仍通过。
+仓库目录下的 `backups/v0.1/` 有 569 MB 的旧浏览器与构建产物，未被 Git 跟踪。清理前先确认里面没有还需要的东西。
 
 ## 12. 禁令与陷阱
 
