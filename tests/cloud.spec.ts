@@ -273,3 +273,56 @@ test('shares one record but lets only its author delete it', async ({
     await fixture.close()
   }
 })
+
+test('a stale plan write is rejected instead of overwriting the newer version', async ({
+  page,
+  context,
+  browser,
+}, testInfo) => {
+  test.setTimeout(90000)
+  const second = await browser.newContext({ viewport: testInfo.project.use.viewport })
+  const fixture = await emulateSupabase([context, second])
+  try {
+    const b = await second.newPage()
+    await login(page, 'a@example.invalid')
+    await page.getByLabel('昵称').fill('测试档案')
+    await page.getByLabel('年龄').fill('26')
+    await page.getByLabel('身高（cm）').fill('165')
+    await page.getByLabel('每周可安排天数').fill('3')
+    await page.getByLabel('每次可安排分钟').fill('25')
+    await page.getByLabel('我已检查并确认上述身体限制').check()
+    await page.getByRole('button', { name: '保存共享档案' }).click()
+
+    await page.goto('/training')
+    await page.getByRole('button', { name: '生成我的计划' }).click()
+    await page.getByRole('button', { name: '确认使用此计划' }).click()
+    await expect(page.getByText(/v1 · 生成于/)).toBeVisible()
+
+    // 第二台设备用同一账号登录，看到同一份 v1
+    await login(b, 'a@example.invalid')
+    await b.goto('/training')
+    await expect(b.getByText(/v1 · 生成于/)).toBeVisible()
+
+    const editDay = async (target: Page) => {
+      await target.locator('.week-plan > button').filter({ hasText: '分' }).first().click()
+      await target
+        .getByRole('dialog')
+        .getByRole('button', { name: /保存为 v2/ })
+        .click()
+    }
+
+    await editDay(page)
+    await expect(page.getByText(/v2 · 生成于/)).toBeVisible()
+
+    // 第二台仍停留在 v1：提交必须被拒，而不是把 A 的 v2 覆盖掉
+    await editDay(b)
+    await expect(b.locator('.toast')).toContainText('计划已在另一处更新')
+    await expect(b.getByText(/v2 · 生成于/)).toBeVisible()
+    // A 的版本没有被改写
+    await page.reload()
+    await expect(page.getByText(/v2 · 生成于/)).toBeVisible()
+  } finally {
+    await second.close()
+    await fixture.close()
+  }
+})

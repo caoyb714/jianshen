@@ -28,6 +28,7 @@ export default function Records() {
       data,
       removeWorkout,
       cloud,
+      notify,
     } = useProfile(),
     habit = active.habits.find((h) => h.date === today) ?? emptyHabit(active.id, today)
   const [sleep, setSleep] = useState(String(habit.sleep ?? '')),
@@ -40,6 +41,15 @@ export default function Records() {
     [weightError, setWeightError] = useState(''),
     [editingWeight, setEditingWeight] = useState(false),
     [pendingDelete, setPendingDelete] = useState<string | null>(null)
+  // 删除确认是行内展开，按 Esc 应当能退出，而不是只能点取消
+  useEffect(() => {
+    if (!pendingDelete) return
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setPendingDelete(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [pendingDelete])
   // 体重只有一个数据源：每日指标。取最近两条有效记录算变化，0 与 null 不算有效。
   const weighed = latestWeights(active.metrics),
     latestWeight = weighed[0],
@@ -112,6 +122,8 @@ export default function Records() {
       setWeightError('')
       setEditingWeight(false)
       setWeight('')
+      // 走全局提示：它有 role="status"，读屏会播报，视觉上也是即时反馈
+      notify('已记录今天的体重')
     } else setWeightError('体重未获保存确认，输入已保留。')
   }
   /** 变化只做中性描述：不加箭头，不用红绿，体重不是成绩 */

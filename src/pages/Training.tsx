@@ -70,6 +70,8 @@ export default function Training() {
   const [editDay, setEditDay] = useState<PlanDay | null>(null)
   const [dayBusy, setDayBusy] = useState(false)
   const [now, setNow] = useState(() => Date.now())
+  // 只给读屏用的播报：采纳、理由失败这类状态变化没有视觉焦点可依赖
+  const [announce, setAnnounce] = useState('')
   const autoGuard = useRef(false)
   const todayIndex = weekdayIndex(today)
   const todayPlan = plan?.days[todayIndex]
@@ -259,6 +261,7 @@ export default function Training() {
       cloud ? await accessToken() : null,
     )
     const current = readGate()
+    if (!result.ok) setAnnounce('理由暂时不可用，计划与采纳不受影响。')
     if (result.ok) {
       // 只有成功才计数：一次网络抖动不该白白用掉当天的额度
       saveGate(kind === 'auto' ? markAuto(current) : markManual(current, Date.now()))
@@ -578,6 +581,7 @@ export default function Training() {
                           onClick={() => {
                             setIgnored((cur) => cur.filter((row) => row !== sig))
                             setStaged((cur) => (cur.includes(sig) ? cur : [...cur, sig]))
+                            setAnnounce(`已采纳：${row.name}。卡底确认后才会生效。`)
                           }}
                         >
                           采纳
@@ -608,6 +612,9 @@ export default function Training() {
                 : `按 ${staged.length} 条建议生成新版本`}
             </button>
           ) : null}
+          <p className="sr-only" role="status">
+            {announce}
+          </p>
           <div className="adjust-credit">
             <span className="small-muted">
               调整幅度由本地规则按你的记录计算；理由说明由 AI 改写，仅供参考。

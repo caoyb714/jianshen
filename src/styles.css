@@ -3059,3 +3059,12 @@ legend {
   color: var(--ink, #494047);
   max-width: 150px;
 }
+/* 触屏设备：常用的小号按钮抬到 44px，避免手指点不中 */
+@media (pointer: coarse) {
+  .text-button,
+  .chip-button,
+  .sets-stepper button,
+  .week-days > button {
+    min-height: 44px;
+  }
+}

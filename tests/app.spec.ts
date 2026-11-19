@@ -308,8 +308,13 @@ test('adopting a suggestion stays a draft until the version is generated', async
   await expect(card.getByRole('button', { name: /按 1 条建议生成新版本/ })).toHaveCount(0)
   expect(await week.innerText()).toBe(before)
 
+  // 采纳可以用键盘完成，读屏会收到播报（按钮是原生 button，Enter 即可）
+  const adopt = card.getByRole('button', { name: '采纳' }).first()
+  await adopt.focus()
+  await page.keyboard.press('Enter')
+  await expect(card.locator('.sr-only[role="status"]')).toContainText('已采纳')
+
   // 真正提交：版本 +1，条目转为已生效
-  await card.getByRole('button', { name: '采纳' }).first().click()
   await card.getByRole('button', { name: /按 1 条建议生成新版本/ }).click()
   await expect(page.getByText(/v2 · 生成于/)).toBeVisible()
   await expect(card.getByText(/已生效 · v2/)).toBeVisible()
@@ -406,4 +411,56 @@ test('a single day can be edited without regenerating the week', async ({ page }
   await expect(page.getByText(/v3 · 生成于/)).toBeVisible()
   await expect(page.getByRole('button', { name: `${otherLabel}的安排` })).toContainText('休息')
   await expect(page.getByRole('button', { name: `${label}的安排` })).toContainText('分')
+})
+
+test('hiding weight removes every weight number from records and growth', async ({ page }) => {
+  await page.goto('/records')
+  await page.getByRole('button', { name: /记录体重|更新今天的体重/ }).click()
+  await page.getByLabel('今天的体重（kg）').fill('61.4')
+  await page.getByRole('button', { name: '保存', exact: true }).click()
+  await expect(page.locator('.toast')).toContainText('已记录今天的体重')
+
+  await page.goto('/growth')
+  await expect(page.getByRole('button', { name: '体重', exact: true })).toBeVisible()
+  await expect(page.getByRole('columnheader', { name: '体重（kg）' })).toBeVisible()
+
+  // 关掉开关：记录页的壳里不允许剩下任何数字
+  await page.goto('/me')
+  await page.getByRole('switch', { name: '显示体重记录' }).click()
+  await page.goto('/records')
+  const panel = page.locator('.weight-panel')
+  await expect(panel).toContainText('体重记录已隐藏')
+  expect(await panel.innerText()).not.toMatch(/\d/)
+
+  // 成长页：tab 与表格列都要消失
+  await page.goto('/growth')
+  await expect(page.getByRole('button', { name: '体重', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('columnheader', { name: '体重（kg）' })).toHaveCount(0)
+
+  // 重新打开：数据还在，只是之前不显示
+  await page.goto('/me')
+  await page.getByRole('switch', { name: '显示体重记录' }).click()
+  await page.goto('/growth')
+  await expect(page.getByRole('button', { name: '体重', exact: true })).toBeVisible()
+  await expect(page.getByRole('columnheader', { name: '体重（kg）' })).toBeVisible()
+})
+
+test('delete confirmation can be cancelled with Escape', async ({ page }) => {
+  await page.goto('/records')
+  const row = page.locator('.history-row').first()
+  await row.locator('summary').click()
+  await row.getByRole('button', { name: '删除这条记录' }).click()
+  await expect(row.getByRole('button', { name: '确认删除' })).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(row.getByRole('button', { name: '确认删除' })).toHaveCount(0)
+  await expect(row.getByRole('button', { name: '删除这条记录' })).toBeVisible()
+})
+
+test('interactive controls meet the 44px touch minimum', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.use.hasTouch !== true, '只在触屏视口检查')
+  await page.goto('/records')
+  const row = page.locator('.history-row').first()
+  await row.locator('summary').click()
+  const box = await row.getByRole('button', { name: '删除这条记录' }).boundingBox()
+  expect(box?.height ?? 0).toBeGreaterThanOrEqual(44)
 })
