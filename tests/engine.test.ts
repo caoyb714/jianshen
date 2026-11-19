@@ -260,13 +260,18 @@ describe('渐进负荷建议', () => {
     const result = suggest({ ...input, history })
     expect(result.kind).toBe('reduce')
   })
-  it('出现过不适时建议停止并给出替代动作', () => {
+  it('出现过不适时建议停止，并在同器械下给出替代动作', () => {
     const history: ExerciseSession[] = [
       { date: '2026-11-15', sets: [{ reps: 10, load: 6 }], difficulty: 6, discomfort: true },
     ]
-    const result = suggest({ ...input, history })
-    expect(result.kind).toBe('stop')
-    if (result.kind === 'stop') expect(result.alternative).toBeTruthy()
+    // 哑铃弯举的替代项都是弹力带动作：只有哑铃的人没有可替换项，宁可不给也不能瞎给
+    const withDumbbell = suggest({ ...input, history })
+    expect(withDumbbell.kind).toBe('stop')
+    if (withDumbbell.kind === 'stop') expect(withDumbbell.alternative).toBeNull()
+
+    const withBand = suggest({ ...input, equipment: '弹力带' as const, history })
+    expect(withBand.kind).toBe('stop')
+    if (withBand.kind === 'stop') expect(withBand.alternative).toBe('band-curl')
   })
   it('每四周安排一次降载', () => {
     expect(isDeloadWeek(4)).toBe(true)

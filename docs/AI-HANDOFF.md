@@ -306,11 +306,13 @@ await day.click() // 打开单日编辑
 
 ## 10. 已知缺口
 
-### 10.1 AI 触发策略：客户端已实现，服务端鉴权仍缺
+### 10.1 AI 触发策略与鉴权（已完成）
 
 **已实现**（`src/app/aiBasis.ts` + `Training.tsx`）：进页面 800ms 自动拉一次，条件为「已同意 + 在线 + 有可执行建议 + 该版本本天未拉过」；手动每天 4 次成功额度，每次成功进 30 秒冷却，额度用完直接显示「今天的理由已用完」而不是假装倒计时；失败不计数。状态按 `planStamp + 本地日期` 落 localStorage，换版本或跨天自动重置。
 
-**仍缺**：`/api/explain` 没有鉴权，任何人拿到地址都能直接调用（服务端只有每 IP 每分钟 5 次限流）。补法：Function 里校验 `Authorization: Bearer <supabase access token>`，失败返回 401；客户端从会话取 token 带上。需要在 Pages 配一个非 VITE 前缀的 `SUPABASE_URL`，否则只验证签名所需的项目地址拿不到。
+**服务端鉴权**也已补上：`/api/explain` 要求 `Authorization: Bearer <supabase access token>`，用 Supabase 的 `/auth/v1/user` 判定，401 时直接拒绝；`SUPABASE_URL` 缺失时 fail closed（返回 `not-configured`，不放行匿名）。客户端从会话取 token，经 `src/cloud/session.ts` 传给请求。
+
+**线上实测（2026-11-19）**：无 token → 401、伪造 token → 401、真实登录 token → 200 且正常返回理由。
 
 ### 10.2 撤销跨刷新（已解决）
 

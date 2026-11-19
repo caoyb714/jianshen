@@ -9,8 +9,12 @@
  * 最多把已校验的已知字段拼成一份清单交给模型解释。
  */
 
-/** 只声明本函数真正读取的变量；缺失视为未配置，而不是运行错误。 */
-type Env = { DEEPSEEK_API_KEY?: string }
+/**
+ * 只声明本函数真正读取的变量；缺失视为未配置，而不是运行错误。
+ * SUPABASE_URL 用于校验调用者的登录状态：没有它就只能拒绝服务，
+ * 绝不能因为「没配置」而放行——那等于把代理变成公开接口。
+ */
+type Env = { DEEPSEEK_API_KEY?: string; SUPABASE_URL?: string; SUPABASE_ANON_KEY?: string }
 
 /** 不引入 @cloudflare/workers-types，手写最小上下文，避免新增依赖。 */
 type Context = { request: Request; env: Env }
@@ -87,6 +91,37 @@ function readContent(data: unknown): string | null {
   return typeof content === 'string' ? content : null
 }
 
+/**
+ * 用 Supabase 的 /auth/v1/user 验证 token。
+ *
+ * 为什么不在本地解 JWT：解出 payload 不等于验证签名，自己实现等于假校验。
+ * 交给 Supabase 判定虽然多一次请求，但结论可信。
+ */
+async function authorize(request: Request, env: Env): Promise<Response | null> {
+  const header = request.headers.get('authorization')
+  if (!header?.startsWith('Bearer ')) return reply({ ok: false, reason: 'unauthorized' }, 401)
+
+  const base = (env.SUPABASE_URL ?? '').trim().replace(/\/+$/, '')
+  if (!base) {
+    // 配置缺失时宁可整体不可用，也不能放行匿名调用
+    console.error('SUPABASE_URL missing')
+    return reply({ ok: false, reason: 'not-configured' })
+  }
+
+  try {
+    const response = await fetch(`${base}/auth/v1/user`, {
+      headers: {
+        authorization: header,
+        ...(env.SUPABASE_ANON_KEY ? { apikey: env.SUPABASE_ANON_KEY } : {}),
+      },
+    })
+    if (!response.ok) return reply({ ok: false, reason: 'unauthorized' }, 401)
+    return null
+  } catch {
+    return reply({ ok: false, reason: 'unauthorized' }, 401)
+  }
+}
+
 async function handle(context: Context): Promise<Response> {
   const key = context.env.DEEPSEEK_API_KEY?.trim()
   // 未配置时不是故障：本机开发、试用环境都应该安静地少一块说明
@@ -126,6 +161,12 @@ async function handle(context: Context): Promise<Response> {
   // 否则一条畸形请求会被当成散文请求发给上游，白花一次额度。
   const basis = validateBasis(body)
   if (!basis) return reply({ ok: false, reason: 'bad-request' })
+
+  // 校验放在参数校验之后、调用上游之前：格式错误不消耗鉴权请求，
+  // 但任何要花钱的调用都必须先证明「你是这个空间的登录用户」。
+  const denied = await authorize(context.request, context.env)
+  if (denied) return denied
+
   return runBasis(basis, key)
 }
 

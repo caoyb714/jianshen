@@ -1053,6 +1053,42 @@ export function isAvailable(exercise: Exercise, equipment: Equipment[]): boolean
 }
 
 /**
+ * 替代关系的无向并集，保留作者写的顺序（先写的优先），再补上反向发现的动作。
+ *
+ * 数据里通常只有一侧写了对方（A 写 B，B 没写 A），直接读字段从 B 出发就换不回 A。
+ */
+export function alternativeIds(id: string): string[] {
+  const source = getExercise(id)
+  if (!source) return []
+  const ids = [...source.alternatives]
+  for (const item of exercises) {
+    if (item.alternatives.includes(id) && !ids.includes(item.id)) ids.push(item.id)
+  }
+  return ids.filter((item) => item !== id)
+}
+
+/**
+ * 可替换的动作，在无向并集之上再按「同模式 + 同剂量类型 + 可用器械」过滤。
+ *
+ * 剂量类型必须一致：把「8–12 次」换成「保持 30 秒」，计划里的目标就失去意义。
+ * 器械不可用的也不返回——给了也做不了，不如明确说没有可替换项。
+ */
+export function alternativesFor(id: string, equipment: Equipment[] = []): Exercise[] {
+  const source = getExercise(id)
+  if (!source) return []
+  const usable = equipment.length > 0 ? equipment : [source.equipment]
+  return alternativeIds(id)
+    .map((item) => getExercise(item))
+    .filter(
+      (item): item is Exercise =>
+        !!item &&
+        item.pattern === source.pattern &&
+        item.dose.type === source.dose.type &&
+        isAvailable(item, usable),
+    )
+}
+
+/**
  * 逐组记录里「负荷」一栏的文案：不同器械对应的物理量不同，
  * 统一写「负重」会让弹力带和徒手动作难以理解，所以按器械给出口径。
  */

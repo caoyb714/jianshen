@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { localDate, weekDates, weekdayIndex } from '../src/domain/dates'
-import { getExercise, loadHint } from '../src/domain/exercises'
+import {
+  alternativeIds,
+  alternativesFor,
+  exercises,
+  getExercise,
+  loadHint,
+} from '../src/domain/exercises'
 import { readJson, removeKey, writeJson } from '../src/app/storage'
 import { loadData, saveData, STORAGE_KEY } from '../src/domain/repository'
 import { makeSeed, PROFILE_A } from '../src/domain/seed'
@@ -340,5 +346,31 @@ describe('计划的可追溯字段', () => {
     const parsed = trainingPlanSchema.safeParse(traced)
     expect(parsed.success).toBe(true)
     if (parsed.success) expect(parsed.data.baselineVersion).toBe(1)
+  })
+})
+
+describe('替代动作', () => {
+  it('替代关系按无向并集处理：一侧写了就够', () => {
+    const oneWay = exercises
+      .flatMap((item) =>
+        item.alternatives
+          .filter((id) => !(getExercise(id)?.alternatives ?? []).includes(item.id))
+          .map((id) => [item.id, id] as const),
+      )
+      .at(0)
+    // 数据里确实存在单向关系，否则这条规则没有存在意义
+    expect(oneWay).toBeTruthy()
+    const [from, to] = oneWay!
+    expect(getExercise(from)!.alternatives).toContain(to)
+    expect(getExercise(to)!.alternatives).not.toContain(from)
+    expect(alternativeIds(to)).toContain(from)
+  })
+
+  it('只返回同模式、同剂量类型、器械可用的替代', () => {
+    const bandOnly = alternativesFor('db-curl', ['弹力带']).map((item) => item.id)
+    expect(bandOnly).toContain('band-curl')
+    expect(bandOnly).not.toContain('db-curl')
+    // 只有哑铃时不返回弹力带动作：给了也做不了
+    expect(alternativesFor('db-curl', ['哑铃'])).toEqual([])
   })
 })

@@ -32,14 +32,38 @@ function nextIp() {
   return `203.0.113.${ipSeq}`
 }
 
+/** 除鉴权相关用例外，其余用例都带一个「已登录」的 token */
+const TOKEN = 'Bearer test-access-token'
+
+/**
+ * 包装 fetch：`/auth/v1/user` 默认返回 200，其余交给用例自己的实现。
+ * 这样每个用例只需要关心 DeepSeek 的返回，不必重复写鉴权桩。
+ */
+function stubFetch(handler: (url: string, init?: RequestInit) => Response | Promise<Response>) {
+  const mock = vi.fn((url: string, init?: RequestInit) =>
+    String(url).includes('/auth/v1/user')
+      ? Promise.resolve(new Response(JSON.stringify({ id: 'user-1' }), { status: 200 }))
+      : Promise.resolve(handler(String(url), init)),
+  )
+  vi.stubGlobal('fetch', mock)
+  return mock
+}
+
+function upstreamCalls(mock: ReturnType<typeof vi.fn>) {
+  return mock.mock.calls.filter(([url]) => String(url).includes('api.deepseek.com'))
+}
+
 function call(body: unknown, options: { key?: string } = {}) {
   return onRequest({
     request: new Request('https://herfit.test/api/explain', {
       method: 'POST',
-      headers: { 'cf-connecting-ip': nextIp() },
+      headers: { 'cf-connecting-ip': nextIp(), authorization: TOKEN },
       body: JSON.stringify(body),
     }),
-    env: { DEEPSEEK_API_KEY: options.key ?? key },
+    env: {
+      DEEPSEEK_API_KEY: options.key ?? key,
+      SUPABASE_URL: 'https://herfit.supabase.co',
+    },
   })
 }
 
@@ -53,14 +77,13 @@ afterEach(() => {
 
 describe('条目化依据', () => {
   it('按 sig 返回每条理由', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
+    stubFetch(() =>
       upstream(
         JSON.stringify({
           items: [{ sig: payload.items[0].sig, text: '上次 10 次很稳，负荷加 2.5 kg。' }],
         }),
       ),
     )
-    vi.stubGlobal('fetch', fetchMock)
 
     const body = (await (await call(payload)).json()) as {
       ok: boolean
@@ -72,17 +95,14 @@ describe('条目化依据', () => {
   })
 
   it('丢弃不在白名单里的 sig', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue(
-        upstream(
-          JSON.stringify({
-            items: [
-              { sig: 'made-up', text: '这条不该出现，10 次。' },
-              { sig: payload.items[0].sig, text: '上次 10 次很稳。' },
-            ],
-          }),
-        ),
+    stubFetch(() =>
+      upstream(
+        JSON.stringify({
+          items: [
+            { sig: 'made-up', text: '这条不该出现，10 次。' },
+            { sig: payload.items[0].sig, text: '上次 10 次很稳。' },
+          ],
+        }),
       ),
     )
     const body = (await (await call(payload)).json()) as {
@@ -92,14 +112,11 @@ describe('条目化依据', () => {
   })
 
   it('编造数字的理由整条丢弃，不降到自由发挥', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue(
-        upstream(
-          JSON.stringify({
-            items: [{ sig: payload.items[0].sig, text: '上次 12 次，可以再加 5 kg。' }],
-          }),
-        ),
+    stubFetch(() =>
+      upstream(
+        JSON.stringify({
+          items: [{ sig: payload.items[0].sig, text: '上次 12 次，可以再加 5 kg。' }],
+        }),
       ),
     )
     const body = (await (await call(payload)).json()) as { items: unknown[] }
@@ -107,10 +124,7 @@ describe('条目化依据', () => {
   })
 
   it('模型没按 JSON 输出时返回空数组而不是报错', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue(upstream('这段理由不是 JSON，但看起来很正常。')),
-    )
+    stubFetch(() => upstream('这段理由不是 JSON，但看起来很正常。'))
     const response = await call(payload)
     expect(await response.json()).toEqual({ ok: true, items: [] })
   })
@@ -188,7 +202,10 @@ function rawCall(options: {
   declared?: string
   text?: () => Promise<string>
 }) {
-  const headers: Record<string, string> = { 'cf-connecting-ip': options.ip ?? nextIp() }
+  const headers: Record<string, string> = {
+    'cf-connecting-ip': options.ip ?? nextIp(),
+    authorization: TOKEN,
+  }
   if (options.declared) headers['content-length'] = options.declared
   const request = {
     method: options.method ?? 'POST',
@@ -197,7 +214,10 @@ function rawCall(options: {
   } as unknown as Request
   return onRequest({
     request,
-    env: { DEEPSEEK_API_KEY: options.key === undefined ? key : options.key },
+    env: {
+      DEEPSEEK_API_KEY: options.key === undefined ? key : options.key,
+      SUPABASE_URL: 'https://herfit.supabase.co',
+    },
   })
 }
 
@@ -252,16 +272,9 @@ describe('条目化依据的防御分支', () => {
   })
 
   it('同一 IP 一分钟内超过 5 次时拒绝，上游只收到 5 次', async () => {
-    const fetchMock = vi
-      .fn()
-      .mockImplementation(() =>
-        Promise.resolve(
-          upstream(
-            JSON.stringify({ items: [{ sig: payload.items[0].sig, text: '上次 10 次。' }] }),
-          ),
-        ),
-      )
-    vi.stubGlobal('fetch', fetchMock)
+    const fetchMock = stubFetch(() =>
+      upstream(JSON.stringify({ items: [{ sig: payload.items[0].sig, text: '上次 10 次。' }] })),
+    )
     const ip = nextIp()
     for (let index = 1; index <= 5; index += 1) {
       const allowed = await rawCall({ body: JSON.stringify(payload), ip })
@@ -269,11 +282,12 @@ describe('条目化依据的防御分支', () => {
     }
     const blocked = await rawCall({ body: JSON.stringify(payload), ip })
     expect(await blocked.json()).toEqual({ ok: false, reason: 'rate-limited' })
-    expect(fetchMock).toHaveBeenCalledTimes(5)
+    // 每次调用会有一次鉴权请求 + 一次上游请求，这里只数真正花在模型上的那次
+    expect(upstreamCalls(fetchMock)).toHaveLength(5)
   })
 
   it('上游报错时只回 upstream，不泄漏地址与密钥', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('boom', { status: 500 })))
+    stubFetch(() => new Response('boom', { status: 500 }))
     const body = await (await call(payload)).json()
     expect(body).toEqual({ ok: false, reason: 'upstream' })
     expectNoLeak(body)
@@ -283,14 +297,11 @@ describe('条目化依据的防御分支', () => {
     vi.useFakeTimers()
     // 超时分支会打一条日志，测试里不需要它出现在输出中
     const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined)
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(
-        (_url: string, init: RequestInit) =>
-          new Promise((_resolve, reject) => {
-            init.signal?.addEventListener('abort', () => reject(new Error('aborted')))
-          }),
-      ),
+    stubFetch(
+      (_url, init) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new Error('aborted')))
+        }),
     )
     const pending = call(payload)
     await vi.advanceTimersByTimeAsync(12000)
@@ -301,17 +312,14 @@ describe('条目化依据的防御分支', () => {
 
   it('理由超过 40 字被截断，短于 8 字被丢弃', async () => {
     const long = `上次 10 次很稳，${'可以继续保持这个节奏不要急着加重量。'.repeat(3)}`
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue(
-        upstream(
-          JSON.stringify({
-            items: [
-              { sig: payload.items[0].sig, text: '10 次' },
-              { sig: payload.items[0].sig, text: long },
-            ],
-          }),
-        ),
+    stubFetch(() =>
+      upstream(
+        JSON.stringify({
+          items: [
+            { sig: payload.items[0].sig, text: '10 次' },
+            { sig: payload.items[0].sig, text: long },
+          ],
+        }),
       ),
     )
     const body = (await (await call(payload)).json()) as {
@@ -319,5 +327,48 @@ describe('条目化依据的防御分支', () => {
     }
     expect(body.items).toHaveLength(1)
     expect(body.items[0].text.length).toBeLessThanOrEqual(40)
+  })
+})
+
+describe('鉴权', () => {
+  it('没有 Authorization 时返回 401，且不调用上游', async () => {
+    const fetchMock = stubFetch(() => upstream('不应被调用'))
+    const response = await onRequest({
+      request: new Request('https://herfit.test/api/explain', {
+        method: 'POST',
+        headers: { 'cf-connecting-ip': nextIp() },
+        body: JSON.stringify(payload),
+      }),
+      env: { DEEPSEEK_API_KEY: key, SUPABASE_URL: 'https://herfit.supabase.co' },
+    })
+    expect(response.status).toBe(401)
+    expect(await response.json()).toEqual({ ok: false, reason: 'unauthorized' })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('token 被 Supabase 拒绝时返回 401，不消耗模型额度', async () => {
+    const fetchMock = vi.fn((url: string) =>
+      String(url).includes('/auth/v1/user')
+        ? Promise.resolve(new Response('{}', { status: 401 }))
+        : Promise.resolve(upstream('不应被调用')),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const response = await call(payload)
+    expect(response.status).toBe(401)
+    expect(await response.json()).toEqual({ ok: false, reason: 'unauthorized' })
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('deepseek'))).toHaveLength(0)
+  })
+
+  it('缺少 SUPABASE_URL 时 fail closed，不放行匿名调用', async () => {
+    vi.stubGlobal('fetch', vi.fn())
+    const response = await onRequest({
+      request: new Request('https://herfit.test/api/explain', {
+        method: 'POST',
+        headers: { 'cf-connecting-ip': nextIp(), authorization: TOKEN },
+        body: JSON.stringify(payload),
+      }),
+      env: { DEEPSEEK_API_KEY: key },
+    })
+    expect(await response.json()).toEqual({ ok: false, reason: 'not-configured' })
   })
 })

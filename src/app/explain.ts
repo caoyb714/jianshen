@@ -12,13 +12,20 @@ const BASIS_TIMEOUT_MS = 18000
  * 与整段说明不同，这里的失败不会让卡片变空：界面只用本地幅度渲染，
  * 缺的只是理由那一行，所以任何异常都收敛成 { ok: false }。
  */
-export async function requestBasis(payload: BasisPayload): Promise<BasisResponse> {
+export async function requestBasis(
+  payload: BasisPayload,
+  token?: string | null,
+): Promise<BasisResponse> {
   const controller = new AbortController()
   const timer = window.setTimeout(() => controller.abort(), BASIS_TIMEOUT_MS)
   try {
     const response = await fetch('/api/explain', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: {
+        'content-type': 'application/json',
+        // 服务端会拿这个 token 去 Supabase 校验；没有就只能是匿名，会被拒
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+      },
       body: JSON.stringify(payload),
       signal: controller.signal,
     })

@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 import { useProfile } from '../app/Store'
 import { requestBasis } from '../app/explain'
+import { accessToken } from '../cloud/session'
 import { readJson, writeJson } from '../app/storage'
 import {
   canAuto,
@@ -35,7 +36,7 @@ import {
   type Suggestion,
 } from '../domain/engine'
 import { historyFor, reviewPlan } from '../domain/stats'
-import { getExercise, LIBRARY_REVIEWED } from '../domain/exercises'
+import { alternativesFor, getExercise, LIBRARY_REVIEWED } from '../domain/exercises'
 import { weekdayIndex } from '../domain/dates'
 import { AI_CONSENT_KEY, buildBasisPayload, formatTarget, type BasisItem } from '../domain/ai'
 import type { PlanDay, PlanSlot, TrainingPlan } from '../domain/model'
@@ -254,6 +255,8 @@ export default function Training() {
         workouts: active.workouts,
         today,
       }),
+      // 演示模式没有会话，传 null；云模式必须带 token，否则服务端会拒绝
+      cloud ? await accessToken() : null,
     )
     const current = readGate()
     if (result.ok) {
@@ -717,7 +720,7 @@ export default function Training() {
                         +
                       </button>
                     </div>
-                    {exercise && exercise.alternatives.length > 0 ? (
+                    {exercise && alternativesFor(slot.exerciseId, profile.equipment).length > 0 ? (
                       <label className="day-slot-swap">
                         <span className="small-muted">换动作</span>
                         <select
@@ -726,14 +729,11 @@ export default function Training() {
                           onChange={(event) => swapSlot(index, event.target.value)}
                         >
                           <option value={slot.exerciseId}>{exercise.name}</option>
-                          {exercise.alternatives.map((id) => {
-                            const alternative = getExercise(id)
-                            return alternative ? (
-                              <option key={id} value={id}>
-                                {alternative.name}
-                              </option>
-                            ) : null
-                          })}
+                          {alternativesFor(slot.exerciseId, profile.equipment).map((alternative) => (
+                            <option key={alternative.id} value={alternative.id}>
+                              {alternative.name}
+                            </option>
+                          ))}
                         </select>
                       </label>
                     ) : null}

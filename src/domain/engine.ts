@@ -8,6 +8,7 @@
  */
 
 import {
+  alternativesFor,
   exercises,
   getExercise,
   isAvailable,
@@ -379,14 +380,13 @@ function roundLoad(value: number): number {
  */
 export function suggest(session: SuggestInput): Suggestion {
   const { history, exerciseId, targetRepsMax, equipment, currentLoad } = session
-  const exercise = getExercise(exerciseId)
-
   const discomfort = history.find((item) => item.discomfort)
   if (discomfort) {
     return {
       kind: 'stop',
       reason: `${discomfort.date} 记录了训练中不适，先暂停这个动作。`,
-      alternative: exercise?.alternatives[0] ?? null,
+      // 用无向并集挑替代：数据里只写了一侧的情况很常见
+      alternative: alternativesFor(exerciseId, [equipment])[0]?.id ?? null,
     }
   }
 

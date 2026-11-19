@@ -3,6 +3,7 @@ import { createClient, type Session, type SupabaseClient } from '@supabase/supab
 import { Field } from '../components/UI'
 import type { CloudConfig } from './config'
 import { CloudWorkspace } from './CloudWorkspace'
+import { setSupabaseClient } from './session'
 import { CloudCard } from './CloudCard'
 
 let browserClient: SupabaseClient | undefined
@@ -44,6 +45,8 @@ export default function CloudGate({
   children: ReactNode
 }) {
   const client = getClient(config)
+  // 交给独立的会话模块：训练页请求 AI 时要取 access token
+  setSupabaseClient(client)
   const [session, setSession] = useState<Session | null | undefined>(undefined)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
