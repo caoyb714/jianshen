@@ -31,32 +31,37 @@
 
 ## 2. 现在是什么状态
 
-| 项           | 值                                                                                      |
-| ------------ | --------------------------------------------------------------------------------------- |
-| 线上地址     | https://herfit-ec6.pages.dev                                                            |
-| 技术栈       | React 19 + TypeScript + Vite；Cloudflare Pages + Functions；Supabase（Postgres + Auth） |
-| 运行模式     | 云模式（线上）/ 演示模式（本机 localStorage），共用一套 Store 接口                      |
-| 单测         | 92 项，6 个文件                                                                         |
-| 演示 E2E     | 40 项（桌面 + 移动双视口，实际执行 80 次）                                              |
-| 云端 E2E     | 4 项（PGlite 起真实 schema）                                                            |
-| 最近一次全绿 | 2026-11-18 22:49                                                                        |
+| 项           | 值                                                                                                                     |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| 线上地址     | https://herfit-ec6.pages.dev                                                                                           |
+| 代码远端     | `github` → https://github.com/caoyb714/jianshen（私有，master + 标签）；`origin` → `D:\backups\herfit.git`（本机镜像） |
+| 技术栈       | React 19 + TypeScript + Vite；Cloudflare Pages + Functions；Supabase（Postgres + Auth）                                |
+| 运行模式     | 云模式（线上）/ 演示模式（本机 localStorage），共用一套 Store 接口                                                     |
+| 单测         | 105 项，7 个文件                                                                                                       |
+| 演示 E2E     | 40 项（桌面 + 移动双视口，实际执行 80 次）                                                                             |
+| 云端 E2E     | 4 项（PGlite 起真实 schema）                                                                                           |
+| 最近一次全绿 | 2026-11-19 16:20                                                                                                       |
 
 **已完成的能力**
 
-| 能力               | 关键实现                                                         |
-| ------------------ | ---------------------------------------------------------------- |
-| 双档案共享一份空间 | `profiles` 为 1–2 个槽位，各自有档案、计划、记录                 |
-| 规则生成周计划     | `generatePlan()`，7 天，含热身与降载                             |
-| 计划不可变         | 每次改动生成新 `TrainingPlan`，版本 +1，旧版 `status='archived'` |
-| AI 逐条理由        | 幅度由规则算，AI 只写「为什么」，数字必须来自实测                |
-| 采纳进草稿         | 点采纳只改本地 `staged`，卡底才提交                              |
-| 撤销从基线重算     | 不做反向加减，避免累积误差                                       |
-| 单日编辑           | 改组数 / 换替代动作 / 整天改休息，只动那一天                     |
-| 体重单源           | 只存 `metrics[].weight`；记录页写、我的页只读、开关默认可见      |
-| 训练记录删除       | 仅作者可删，行内二次确认，云端 RPC 校验                          |
-| 计划写入乐观锁     | `herfit_write_plan`，陈旧版本返回 40001                          |
+| 能力               | 关键实现                                                          |
+| ------------------ | ----------------------------------------------------------------- |
+| 双档案共享一份空间 | `profiles` 为 1–2 个槽位，各自有档案、计划、记录                  |
+| 规则生成周计划     | `generatePlan()`，7 天，含热身与降载                              |
+| 计划不可变         | 每次改动生成新 `TrainingPlan`，版本 +1，旧版 `status='archived'`  |
+| AI 逐条理由        | 幅度由规则算，AI 只写「为什么」，数字必须来自实测                 |
+| 采纳进草稿         | 点采纳只改本地 `staged`，卡底才提交                               |
+| 撤销从基线重算     | 不做反向加减，避免累积误差                                        |
+| 单日编辑           | 改组数 / 换替代动作 / 整天改休息，只动那一天                      |
+| 体重单源           | 只存 `metrics[].weight`；记录页写、我的页只读、开关默认可见       |
+| 训练记录删除       | 仅作者可删，行内二次确认，云端 RPC 校验                           |
+| 计划写入乐观锁     | `herfit_write_plan`，陈旧版本返回 40001                           |
+| 替代动作无向并集   | `alternativesFor()`：同模式 + 同剂量类型 + 器械可用，作者顺序优先 |
+| AI 代理鉴权        | `/api/explain` 要求 Bearer token，交 Supabase 判定，缺失即拒绝    |
 
-**明确没做的**：AI 触发策略（10.1）、撤销跨刷新（10.2）、多端并发 E2E（10.3）、无障碍自动化（10.5）、iOS 实测（10.6）。
+**风险最高的那部分已经做完**：计划可追溯到基线版本（刷新后仍能恢复）、AI 触发有额度与冷却、代理不接受匿名调用、替代动作不会推荐做不了的动作。
+
+**仍没做的**：多端并发 E2E（10.3）、成长页隐藏态断言（10.4）、无障碍自动化（10.5）、iOS 与真实 Key 抽查（10.6）。
 
 ---
 
@@ -67,7 +72,7 @@
 ```bash
 npm ci                 # 安装依赖
 npm run check          # tsc -b，改完必跑
-npm test               # vitest，92 项，约 3 秒
+npm test               # vitest，105 项，约 3 秒
 npm run test:e2e       # Playwright 演示模式，40 项，约 40 秒
 HERFIT_TEST_CLOUD=1 npm run test:e2e   # 云端模式 4 项，约 25 秒
 npm run dev            # http://127.0.0.1:5173
@@ -81,24 +86,35 @@ Playwright 浏览器若报缺失，用仓库内缓存：
 PLAYWRIGHT_BROWSERS_PATH=.cache/playwright-browsers npm run test:e2e
 ```
 
+### 3.1.1 推送到远端
+
+```bash
+git push github master --tags      # GitHub 私有远端：只推分支与标签
+git push origin --mirror           # 本机镜像：全量
+```
+
+不要对 GitHub 用 `--mirror`：它会把 `refs/remotes/origin/*` 一起推上去，在远端留下多余引用（本项目已清理过一次）。
+
 ### 3.2 密钥与账号（都不在仓库里）
 
-| 东西                                      | 位置                                         |
-| ----------------------------------------- | -------------------------------------------- |
-| Supabase service role key                 | `.env.setup.local`（本机，永久令牌）         |
-| 线上账号 `herfit.a@` / `herfit.b@` 的密码 | 根目录 `账号密码.local`                      |
-| DeepSeek Key                              | Cloudflare Pages 环境变量 `DEEPSEEK_API_KEY` |
+| 东西                                      | 位置                                                                                                              |
+| ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Supabase service role key                 | `.env.setup.local`（本机，永久令牌）                                                                              |
+| 线上账号 `herfit.a@` / `herfit.b@` 的密码 | 根目录 `账号密码.local`                                                                                           |
+| DeepSeek Key                              | Cloudflare Pages 环境变量 `DEEPSEEK_API_KEY`                                                                      |
+| 鉴权用项目地址与公开密钥                  | Cloudflare Pages secret `SUPABASE_URL` / `SUPABASE_ANON_KEY`（**不是** `VITE_` 前缀，Functions 读不到 VITE 变量） |
 
 `npm run provision` 建账号与空间；`npm run deploy` 读 `.env.local` 里的 Cloudflare 凭据。
 
 ### 3.3 常见失败
 
-| 现象                                                     | 原因                                             |
-| -------------------------------------------------------- | ------------------------------------------------ |
-| `page.evaluate` 报 `Cannot read properties of undefined` | 本地数据被 schema 拒绝并回落 seed（见 12.1）     |
-| 演示 E2E 里 `/api/explain` 404                           | 正常，本地没有 Pages Functions，这正是测降级路径 |
-| 云端 E2E 连不上                                          | 忘了 `HERFIT_TEST_CLOUD=1`，或 PGlite 缓存未生成 |
-| 手机上看到的还是旧版                                     | PWA 缓存，下拉刷新                               |
+| 现象                                                     | 原因                                                                                                                                             |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `page.evaluate` 报 `Cannot read properties of undefined` | 本地数据被 schema 拒绝并回落 seed（见 12.1）                                                                                                     |
+| 演示 E2E 里 `/api/explain` 404                           | 正常，本地没有 Pages Functions，这正是测降级路径                                                                                                 |
+| 云端 E2E 连不上                                          | 忘了 `HERFIT_TEST_CLOUD=1`，或 PGlite 缓存未生成                                                                                                 |
+| 手机上看到的还是旧版                                     | PWA 缓存，下拉刷新                                                                                                                               |
+| 命令行里 `git` 不是可识别的命令                          | 本机 git 是 WorkBuddy 自带的 PortableGit，未进 PATH。用完整路径调用：`C:\Users\20614\.workbuddy\binaries\PortableGit\versions\1.3.0\cmd\git.exe` |
 
 ---
 
@@ -281,16 +297,16 @@ dataSchema = {
 
 ## 9. 测试体系
 
-| 文件                         | 数量 | 覆盖                                                                                                         |
-| ---------------------------- | ---- | ------------------------------------------------------------------------------------------------------------ |
-| `tests/engine.test.ts`       | 37   | 生成、渐进负荷六分支、安全边界、降载                                                                         |
-| `tests/domain.test.ts`       | 23   | 派生统计、体重取值、周报                                                                                     |
-| `tests/basis.test.ts`        | 15   | 条目化接口：白名单、数字校验、截断、坏 JSON、405、缺 Key、4KB、限流、上游错误不泄漏、超时、重复签名、超 6 条 |
-| `tests/cloud-db.test.ts`     | 10   | PGlite 真实 schema：RLS、两档案、计划唯一、乐观锁、删除鉴权                                                  |
-| `tests/ai.test.ts`           | 5    | 载荷封闭集合、控制字符、6 条上限、近 7 天统计                                                                |
-| `tests/cloud-config.test.ts` | 2    | 配置缺失时的报错                                                                                             |
-| `tests/app.spec.ts`          | 40   | 全流程 UI，桌面 + 移动                                                                                       |
-| `tests/cloud.spec.ts`        | 4    | 双人共享、失败保留输入、仅作者可删                                                                           |
+| 文件                         | 数量 | 覆盖                                                                                                                   |
+| ---------------------------- | ---- | ---------------------------------------------------------------------------------------------------------------------- |
+| `tests/engine.test.ts`       | 39   | 生成、渐进负荷六分支、安全边界、降载周、训练周序号                                                                     |
+| `tests/domain.test.ts`       | 27   | 派生统计、体重取值、周报、计划可追溯字段、替代动作无向并集                                                             |
+| `tests/basis.test.ts`        | 18   | 条目化接口：白名单、数字校验、截断、坏 JSON、405、缺 Key、4KB、限流、上游错误不泄漏、超时、重复签名、超 6 条、鉴权 401 |
+| `tests/cloud-db.test.ts`     | 10   | PGlite 真实 schema：RLS、两档案、计划唯一、乐观锁、删除鉴权                                                            |
+| `tests/ai.test.ts`           | 5    | 载荷封闭集合、控制字符、6 条上限、近 7 天统计                                                                          |
+| `tests/cloud-config.test.ts` | 2    | 配置缺失时的报错                                                                                                       |
+| `tests/app.spec.ts`          | 40   | 全流程 UI，桌面 + 移动                                                                                                 |
+| `tests/cloud.spec.ts`        | 4    | 双人共享、失败保留输入、仅作者可删                                                                                     |
 
 ### 9.1 造数据模板
 
@@ -330,9 +346,9 @@ await day.click() // 打开单日编辑
 
 `aria-live` 播报、44px 热区、焦点顺序、`prefers-reduced-motion` 都没自动验证。
 
-### 10.6 P2 · 真实 DeepSeek 与 iOS 未验证
+### 10.6 P2 · iOS 与真实模型抽查未完成
 
-配 Key 后的真实返回质量（是否守住 40 字、是否复述数字）只能人工抽查；iOS 的 PWA 安装、safe-area、`scrollIntoView` 未测。
+真实 Key 已在 2026-11-19 用真实登录 token 打过一次线上冒烟：返回 `200`，理由里的数字与实测一致。仍缺连续 10 次的抽查（是否越界给数字、是否出现医疗建议）。iOS 的 PWA 安装、safe-area、`scrollIntoView` 仍未测。
 
 ### 10.7 降载周（已接入）
 
@@ -340,43 +356,44 @@ await day.click() // 打开单日编辑
 
 ---
 
-## 11. 下一步计划
+## 11. 剩余工作
 
-> 2026-11-18 按代码复核过一轮：完整排序、证据与验收见 [`docs/ROADMAP.md`](ROADMAP.md)。下面保留原始条目，其中 P0-2 有两处要修正（见该节）。
+> `docs/ROADMAP.md` 是 2026-11-18 写下的完整计划（带代码证据与验收口径），可当背景读。
+> 截至 2026-11-19，其中 P0-1 远端、P0-2 计划可追溯、P0-3 触发策略与鉴权、P1-1 替代关系、P1-2 降载周都已完成，实际状态以本文档第 10 节为准。
 
-### P0-1 补齐 AI 触发策略
+剩下四条，按风险排序。
 
-- 新增 `src/app/aiBasis.ts`：按 `planStamp + date` 记录「今日是否已自动拉过、手动次数、冷却截止」，存 localStorage。
-- `Training.tsx` 接入：进页面 800ms 后满足条件自动拉一次；手动按钮复用同一函数；第 5 次进入 30 秒倒计时；`AbortController` + 返回后复检 `planStamp`。
-- 验收：离线不发请求；自动只发生一次；第 5 次按钮禁用并倒计时；失败只降级理由位；刷新后计数仍在。
-- 影响：`aiBasis.ts`（新）、`Training.tsx`、`tests/basis.test.ts`、`tests/app.spec.ts`。
+### 1. 多端并发 E2E（P1，约半天）
 
-### P0-2 撤销跨刷新
+两个 `browser.context()` 同账号登录：A 改一天保存，B 拿旧版本提交。
 
-- 计划 payload 增加 `baselineVersion`；撤销时从 `plans` 找该版本取 days，套用剩余调整重算。
-- **修正一（2026-11-18 复核）**：只加 `baselineVersion` 不够。撤销时 `suggest()` 可能已经不再给出同一条建议，现有代码正是靠提交时的快照才撤得动（`src/pages/Training.tsx:242` 的注释）。必须把「本版采纳了哪几条」也写进 payload（`appliedAdjustments`），否则刷新后知道基线是哪一版、却不知道要撤哪一条。
-- **修正二**：`valid_payload` 的 plan 分支**不用改**。它只校验必需键、允许多余键（`supabase/migrations/20261116000200_stage3_profiles_plans.sql:158-205`），新字段会原样进 payload；本项**不需要数据库迁移**。
-- 验收：提交 v2 后刷新，「已生效 · v2」仍在；撤销仍生成 v3 且内容等于 v1 基线 + 剩余项。
-- 影响：`model.ts`（**只能是可选字段**）、`Training.tsx`、E2E。
+**验收**：B 收到 40001，界面提示「计划已在另一处更新…」，刷新后数据是 A 的；B 的原输入不丢。
 
-### P1-1 多端并发 E2E
+### 2. 成长页隐藏态（P1，约 2 小时）
 
-- 两个 context 同账号登录，A 改一天保存，B 用旧版本提交，断言 40001 提示与刷新后数据。影响 `tests/cloud.spec.ts`。
+体重开关关闭后，成长页的 tab、表格列、曲线都应回落；重开数据仍在。
 
-### P1-2 成长页隐藏态
+**验收**：一条 E2E 覆盖「关开关 → 成长页无体重列 → 记录页壳无数字 → 重开 → 数据仍在」。
 
-- 补 E2E：关开关后成长页无体重 tab / 列 / 曲线，记录页壳无数字，重开后数据仍在。
+### 3. 无障碍（P2，约半天）
 
-### P1-3 无障碍
+`aria-live` 三处播报（体重已记录、已采纳、理由不可用）、键盘完成采纳、删除确认 Esc 返回、44px 热区。
 
-- `aria-live` 三处（体重已记录、已采纳、理由不可用）用文本断言；键盘完成采纳；删除确认 Esc 返回；检查热区尺寸。
+**验收**：文本断言 + 键盘路径可全流程走通；`prefers-reduced-motion` 下无动画。
 
-### P2 手测清单
+### 4. iOS 与真实模型抽查（P2，人工）
 
-- iOS Safari：安装到主屏、滚动到 `#showWeight`、safe-area 下的底部按钮。
-- 真实 Key：连续 10 次生成，检查是否越界给数字、是否出现医疗建议。
+iOS Safari 安装到主屏、safe-area、`#showWeight` 滚动定位；真实 Key 下连续 10 次生成，检查是否越界给数字、是否出现医疗建议。
 
----
+**验收**：留一份手测记录，异常项进 issue。
+
+### 5. 密钥移出仓库目录（P2，安全卫生）
+
+`.env.setup.local` 里有真实的 `DEEPSEEK_API_KEY`、Supabase service token 与 DB 密码。它已被 `.gitignore` 排除、也未进版本库，但就躺在项目目录里，整目录打包或共享时会一起带走。
+
+**做法**：移到 `%USERPROFILE%\.herfit\`，让 `provision` / `deploy` 从该路径或系统环境变量读取。
+
+**验收**：仓库目录内 `grep -r "sk-"` 无命中；`npm run verify:cloud` 仍通过。
 
 ## 12. 禁令与陷阱
 
